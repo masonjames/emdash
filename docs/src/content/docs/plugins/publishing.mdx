@@ -7,6 +7,10 @@ import { Aside, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Once you've built a plugin, you can publish it to the EmDash Marketplace so other sites can install it from the admin dashboard.
 
+<Aside type="caution">
+  `emdash plugin bundle` and `emdash plugin publish` are for **standard / sandboxed** plugins only. If your plugin depends on trusted-only surfaces like `componentsEntry`, `admin.entry`, or `admin.portableTextBlocks`, publish the trusted package through npm and create a separate marketplace-safe companion if you need admin-installable sandboxed behavior.
+</Aside>
+
 ## Prerequisites
 
 Before publishing, make sure your plugin:
@@ -94,6 +98,7 @@ The bundle command checks:
 
 - **Size limit** — Total bundle must be under 5MB
 - **No Node.js built-ins** — `backend.js` cannot import `fs`, `path`, `child_process`, etc. (sandbox code runs in a V8 isolate, not Node.js)
+- **Trusted-only features rejected** — bundled plugins cannot declare `admin.entry` or `admin.portableTextBlocks`
 - **Icon dimensions** — `icon.png` should be 256x256 (warns if wrong, still includes it)
 - **Screenshot limits** — Max 5 screenshots, max 1920x1080
 

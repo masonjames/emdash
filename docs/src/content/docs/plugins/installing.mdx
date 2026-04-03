@@ -7,6 +7,10 @@ import { Aside, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
 
 EmDash plugins can be installed in two ways: from the marketplace via the admin dashboard, or added directly in your Astro configuration. Marketplace plugins run in an isolated sandbox; config-based plugins run in-process.
 
+<Aside type="tip">
+  Some plugin families ship as a split pair: a trusted package for full rendering features, plus a marketplace-safe companion for admin-managed settings. `emdash-social-sharing` is the reference example — its marketplace companion can manage defaults, while the trusted npm package provides Astro rendering and Portable Text block registration.
+</Aside>
+
 ## From the Marketplace
 
 The admin dashboard includes a marketplace browser where you can search, install, and manage plugins.
@@ -121,6 +125,7 @@ Config-based plugins:
 - Have full access to Node.js APIs
 - Are loaded at build time and on every server start
 - Cannot be installed or removed from the admin UI
+- Are required for features that depend on trusted-only surfaces such as `componentsEntry` or `admin.portableTextBlocks`
 
 <Aside type="tip">
   Use config-based plugins for first-party code and plugins you maintain yourself. Use marketplace plugins for third-party extensions where sandbox isolation provides security benefits.

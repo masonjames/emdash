@@ -105,6 +105,8 @@ export default defineConfig({
    - **Portable Text block types** — PT blocks require Astro components for site-side rendering (`componentsEntry`), loaded at build time from npm. Sandboxed plugins are installed at runtime and cannot ship components.
    - **Custom React admin pages** — Sandboxed plugins use Block Kit for admin UI instead of shipping React components.
 
+   When you need both trusted rendering and marketplace installation, use a split-variant pattern: keep the full rendering package trusted, and ship a separate marketplace-safe companion for settings or workflow UI. The `emdash-social-sharing` plugin family uses this pattern.
+
    The `emdash plugin bundle` command warns if a plugin declares these features.
 
 </Steps>
