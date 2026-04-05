@@ -251,11 +251,11 @@ export function createViteConfig(
 	const cloudflare = isCloudflareAdapter(options.astroConfig);
 	const isDev = command === "dev";
 
-	// In dev mode within the monorepo, alias JS imports to source for instant HMR.
-	// CSS always comes from dist/ (pre-compiled by @tailwindcss/cli) since Tailwind's
-	// Vite plugin has native deps that don't bundle well. Run `pnpm dev` in packages/admin
-	// alongside the demo server to get CSS watch-rebuilds too.
-	const adminSourcePath = isDev ? resolveAdminSource() : undefined;
+	// Only opt into raw admin source aliasing when explicitly requested. A normal
+	// consumer install also contains src/, and forcing that path in dev can feed raw
+	// TSX through an incompatible runtime mix in the host app.
+	const useAdminSource = isDev && process.env.EMDASH_USE_ADMIN_SOURCE === "1";
+	const adminSourcePath = useAdminSource ? resolveAdminSource() : undefined;
 	const useSource = adminSourcePath !== undefined;
 
 	return {

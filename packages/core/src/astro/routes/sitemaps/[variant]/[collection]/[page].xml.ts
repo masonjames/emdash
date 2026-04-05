@@ -1,14 +1,7 @@
-/**
- * Sitemap XML endpoint
- *
-	* GET /sitemap.xml - Auto-generated sitemap or sitemap index from published content.
- */
-
 import type { APIRoute } from "astro";
 
 import {
-	buildRootSitemapPlan,
-	renderSitemapIndex,
+	buildShardSitemapPlan,
 	renderSitemapUrlSet,
 	resolveSitemapRuntimeConfig,
 } from "#seo/sitemap.js";
@@ -25,26 +18,38 @@ function xmlResponse(body: string, status = 200): Response {
 	});
 }
 
-export const GET: APIRoute = async ({ locals, url }) => {
+export const GET: APIRoute = async ({ locals, params, url }) => {
 	const { emdash } = locals;
 
 	if (!emdash?.db) {
 		return xmlResponse("<!-- EmDash not configured -->", 500);
 	}
 
+	const variant = params.variant;
+	const collection = params.collection;
+	const page = params.page ? Number.parseInt(params.page, 10) : Number.NaN;
+	if (!variant || !collection || !Number.isInteger(page) || page < 1) {
+		return xmlResponse("<!-- Sitemap shard not found -->", 404);
+	}
+
 	try {
 		const config = await resolveSitemapRuntimeConfig(emdash.db, url.origin, {
 			seoCorePluginEnabled: emdash.isPluginEnabled("seo-core"),
 		});
-		const plan = await buildRootSitemapPlan(emdash.db, config);
+		const plan = await buildShardSitemapPlan(emdash.db, config, {
+			variant,
+			collection,
+			page,
+		});
 
 		if (plan.kind === "disabled") {
 			return xmlResponse("<!-- Sitemap disabled -->", 404);
 		}
+		if (plan.kind === "not_found") {
+			return xmlResponse("<!-- Sitemap shard not found -->", 404);
+		}
 
-		return xmlResponse(
-			plan.kind === "index" ? renderSitemapIndex(plan.entries) : renderSitemapUrlSet(plan.entries),
-		);
+		return xmlResponse(renderSitemapUrlSet(plan.entries));
 	} catch {
 		return xmlResponse("<!-- Internal error generating sitemap -->", 500);
 	}

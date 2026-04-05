@@ -425,7 +425,11 @@ export async function applySeed(
 					translationOf,
 					createdAt: entry.createdAt,
 					updatedAt: entry.updatedAt,
-					publishedAt: entry.publishedAt ?? (status === "published" ? new Date().toISOString() : null),
+					publishedAt:
+						entry.publishedAt ??
+						entry.createdAt ??
+						entry.updatedAt ??
+						(status === "published" ? new Date().toISOString() : null),
 				});
 
 				seedIdMap.set(entry.id, created.id);

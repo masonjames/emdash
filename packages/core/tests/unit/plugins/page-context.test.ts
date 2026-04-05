@@ -104,4 +104,58 @@ describe("createPublicPageContext", () => {
 
 		expect(result.content).toBeUndefined();
 	});
+
+	it("passes FAQ structured data through unchanged", () => {
+		const result = createPublicPageContext({
+			url: "https://example.com/help/faq",
+			kind: "custom",
+			structuredData: {
+				faq: {
+					items: [
+						{
+							question: "What is EmDash?",
+							answer: "An Astro-native CMS.",
+						},
+					],
+				},
+			},
+		});
+
+		expect(result.structuredData).toEqual({
+			faq: {
+				items: [
+					{
+						question: "What is EmDash?",
+						answer: "An Astro-native CMS.",
+					},
+				],
+			},
+		});
+	});
+
+	it("passes HowTo structured data through unchanged", () => {
+		const result = createPublicPageContext({
+			url: "https://example.com/guides/install",
+			kind: "custom",
+			structuredData: {
+				howTo: {
+					name: "Install EmDash",
+					steps: [
+						{ text: "Install the package." },
+						{ name: "Configure", text: "Wire it into astro.config.mjs." },
+					],
+				},
+			},
+		});
+
+		expect(result.structuredData).toEqual({
+			howTo: {
+				name: "Install EmDash",
+				steps: [
+					{ text: "Install the package." },
+					{ name: "Configure", text: "Wire it into astro.config.mjs." },
+				],
+			},
+		});
+	});
 });

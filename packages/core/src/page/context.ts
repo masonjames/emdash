@@ -5,7 +5,7 @@
  * The resulting context is passed to EmDashHead / EmDashBodyStart / EmDashBodyEnd.
  */
 
-import type { PublicPageContext } from "../plugins/types.js";
+import type { PageStructuredData, PublicPageContext } from "../plugins/types.js";
 
 /** Fields shared by both input forms */
 interface PageContextFields {
@@ -31,6 +31,8 @@ interface PageContextFields {
 	};
 	/** Site name for structured data and og:site_name */
 	siteName?: string;
+	/** Explicit page-scoped schema payloads */
+	structuredData?: PageStructuredData;
 }
 
 /** Input with Astro global -- used in .astro files */
@@ -89,5 +91,6 @@ export function createPublicPageContext(input: CreatePublicPageContextInput): Pu
 		seo: input.seo,
 		articleMeta: input.articleMeta,
 		siteName: input.siteName,
+		structuredData: input.structuredData,
 	};
 }

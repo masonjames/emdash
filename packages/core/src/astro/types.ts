@@ -332,6 +332,9 @@ export interface EmDashHandlers {
 	// Configuration (for checking database type, auth mode, etc.)
 	config: import("./integration/runtime.js").EmDashConfig;
 
+	// Check whether a plugin is currently active/enabled
+	isPluginEnabled: (pluginId: string) => boolean;
+
 	// Manifest invalidation (call after schema changes)
 	invalidateManifest: () => void;
 

@@ -9,7 +9,7 @@ import {
 	handleContentDuplicate,
 	handleContentPermanentDelete,
 } from "../../../src/api/handlers/content.js";
-import { handleSitemapData } from "../../../src/api/handlers/seo.js";
+import { handleSitemapData, handleSitemapSummaryData } from "../../../src/api/handlers/seo.js";
 import { createDatabase } from "../../../src/database/connection.js";
 import { runMigrations } from "../../../src/database/migrations/runner.js";
 import { ContentRepository } from "../../../src/database/repositories/content.js";
@@ -822,6 +822,7 @@ describe("SEO", () => {
 			expect(result.data!.entries).toHaveLength(1);
 			expect(result.data!.entries[0]!.collection).toBe("post");
 			expect(result.data!.entries[0]!.identifier).toBe("published-post");
+			expect(result.data!.entries[0]!.path).toBe("/post/published-post");
 		});
 
 		it("should exclude noindex content from sitemap", async () => {
@@ -951,6 +952,75 @@ describe("SEO", () => {
 			expect(result.data!.entries[0]!.updatedAt).toBeDefined();
 			// Should be a valid date string
 			expect(new Date(result.data!.entries[0]!.updatedAt).getTime()).not.toBeNaN();
+		});
+
+		it("should resolve sitemap paths from collection url patterns", async () => {
+			await registry.updateCollection("post", { urlPattern: "/blog/{slug}" });
+			await repo.create({
+				type: "post",
+				slug: "hello-world",
+				data: { title: "Hello World" },
+				status: "published",
+			});
+
+			const result = await handleSitemapData(db);
+
+			expect(result.success).toBe(true);
+			expect(result.data!.entries[0]!.path).toBe("/blog/hello-world");
+		});
+
+		it("should support paged sitemap queries for a single collection", async () => {
+			await repo.create({
+				type: "post",
+				slug: "first-post",
+				data: { title: "First Post" },
+				status: "published",
+			});
+			await repo.create({
+				type: "post",
+				slug: "second-post",
+				data: { title: "Second Post" },
+				status: "published",
+			});
+
+			const allEntries = await handleSitemapData(db, { collection: "post" });
+			const pagedEntries = await handleSitemapData(db, {
+				collection: "post",
+				limit: 1,
+				offset: 1,
+			});
+
+			expect(allEntries.success).toBe(true);
+			expect(allEntries.data!.entries).toHaveLength(2);
+			expect(pagedEntries.success).toBe(true);
+			expect(pagedEntries.data!.entries).toHaveLength(1);
+			expect(allEntries.data!.entries[1]).toEqual(pagedEntries.data!.entries[0]);
+		});
+
+		it("should summarize sitemap counts per SEO-enabled collection", async () => {
+			await repo.create({
+				type: "post",
+				slug: "summary-post",
+				data: { title: "Summary Post" },
+				status: "published",
+			});
+			await repo.create({
+				type: "page",
+				slug: "summary-page",
+				data: { title: "Summary Page" },
+				status: "published",
+			});
+
+			const result = await handleSitemapSummaryData(db);
+
+			expect(result.success).toBe(true);
+			expect(result.data!.totalEntries).toBe(2);
+			expect(result.data!.collections).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ collection: "page", totalEntries: 1 }),
+					expect.objectContaining({ collection: "post", totalEntries: 1 }),
+				]),
+			);
 		});
 
 		it("should return empty entries when no SEO-enabled collections exist", async () => {

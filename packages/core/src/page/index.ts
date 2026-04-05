@@ -6,13 +6,17 @@
  */
 
 import type {
-	PublicPageContext,
+	PageFaqData,
+	PageHowToData,
 	PageMetadataContribution,
 	PageFragmentContribution,
+	PageStructuredData,
+	PublicPageContext,
 } from "../plugins/types.js";
 
 export { createPublicPageContext } from "./context.js";
 export type { CreatePublicPageContextInput } from "./context.js";
+export type { PageFaqData, PageHowToData, PageStructuredData };
 
 export {
 	resolvePageMetadata,

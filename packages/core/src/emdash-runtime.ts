@@ -46,7 +46,7 @@ interface PageContributions {
 	fragments: PageFragmentContribution[];
 }
 
-const VALID_METADATA_KINDS = new Set(["meta", "property", "link", "jsonld"]);
+const VALID_METADATA_KINDS = new Set(["title", "meta", "property", "link", "jsonld"]);
 
 /** Security-critical allowlist for link rel values from sandboxed plugins */
 const VALID_LINK_REL = new Set([
@@ -62,12 +62,14 @@ const VALID_LINK_REL = new Set([
  * Sandboxed plugins return `unknown` across the RPC boundary — we must
  * verify the shape before passing to the metadata collector.
  */
-function isValidMetadataContribution(c: unknown): c is PageMetadataContribution {
+export function isValidMetadataContribution(c: unknown): c is PageMetadataContribution {
 	if (!c || typeof c !== "object" || !("kind" in c)) return false;
 	const obj = c as Record<string, unknown>;
 	if (typeof obj.kind !== "string" || !VALID_METADATA_KINDS.has(obj.kind)) return false;
 
 	switch (obj.kind) {
+		case "title":
+			return typeof obj.text === "string";
 		case "meta":
 			return typeof obj.name === "string" && typeof obj.content === "string";
 		case "property":
@@ -2089,7 +2091,7 @@ export class EmDashRuntime {
 		return fragments;
 	}
 
-	private isPluginEnabled(pluginId: string): boolean {
+	isPluginEnabled(pluginId: string): boolean {
 		const status = this.pluginStates.get(pluginId);
 		return status === undefined || status === "active";
 	}

@@ -1,10 +1,12 @@
 ---
 /**
- * Renders base SEO metadata, plugin-contributed metadata, and trusted head fragments.
+ * Renders document titles, base SEO metadata, plugin-contributed metadata,
+ * and trusted head fragments.
  *
- * Base SEO metadata (meta tags, OG, Twitter Card, canonical, JSON-LD) is generated
- * from the page context's seo/articleMeta/siteName fields. Plugin contributions
- * come after, so they can override base tags via first-wins dedup in resolvePageMetadata().
+ * Base head metadata (title, meta tags, OG, Twitter Card, canonical, JSON-LD)
+ * is generated from the page context's title/seo/articleMeta/siteName fields.
+ * Plugin contributions come first, so they can override base tags via
+ * first-wins dedup in resolvePageMetadata().
  *
  * Usage:
  * ```astro

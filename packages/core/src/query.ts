@@ -14,6 +14,7 @@
 
 import { getFallbackChain, getI18nConfig, isI18nEnabled } from "./i18n/config.js";
 import { getRequestContext } from "./request-context.js";
+import { patternToRegex } from "./utils/url-patterns.js";
 import {
 	createEditable,
 	createNoop,
@@ -606,19 +607,6 @@ export interface ResolvePathResult<T = Record<string, unknown>> {
 	params: Record<string, string>;
 }
 
-/** Matches `{paramName}` placeholders in URL patterns */
-const URL_PARAM_PATTERN = /\{(\w+)\}/g;
-
-/** Convert a URL pattern like "/blog/{slug}" to a regex and param name list */
-function patternToRegex(pattern: string): { regex: RegExp; paramNames: string[] } {
-	const paramNames: string[] = [];
-	const regexStr = pattern.replace(URL_PARAM_PATTERN, (_match, name: string) => {
-		paramNames.push(name);
-		return "([^/]+)";
-	});
-	return { regex: new RegExp(`^${regexStr}$`), paramNames };
-}
-
 /**
  * Resolve a URL path to a content entry by matching against collection URL patterns.
  *
@@ -657,7 +645,14 @@ export async function resolveEmDashPath<T = Record<string, unknown>>(
 		// Extract params
 		const params: Record<string, string> = {};
 		for (let i = 0; i < paramNames.length; i++) {
-			params[paramNames[i]] = match[i + 1];
+			const paramName = paramNames[i];
+			const rawValue = match[i + 1];
+			if (!paramName || typeof rawValue !== "string") continue;
+			try {
+				params[paramName] = decodeURIComponent(rawValue);
+			} catch {
+				params[paramName] = rawValue;
+			}
 		}
 
 		// Look up entry by slug (most common pattern)

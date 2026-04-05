@@ -13,7 +13,6 @@ interface Props {
 const { title, description, image, type = "website" } = Astro.props;
 const settings = await getSiteSettings();
 const siteTitle = settings?.title || "Studio";
-const fullTitle = title ? `${title} — ${siteTitle}` : siteTitle;
 const siteDescription = settings?.tagline || "Design & Development";
 
 const menu = await getMenu("primary");
@@ -22,7 +21,7 @@ const pageCtx = createPublicPageContext({
 	Astro,
 	kind: "custom",
 	pageType: type,
-	title: fullTitle,
+	title: title ?? siteTitle,
 	description: description || siteDescription,
 	canonical: Astro.url.href,
 	image,
@@ -36,7 +35,6 @@ const pageCtx = createPublicPageContext({
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>{fullTitle}</title>
 		<EmDashHead page={pageCtx} />
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

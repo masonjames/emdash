@@ -10,6 +10,7 @@ import type { PageMetadataContribution, PageMetadataLinkRel } from "../plugins/t
 // ── Resolved output ─────────────────────────────────────────────
 
 export interface ResolvedPageMetadata {
+	title?: string | null;
 	meta: Array<{ name: string; content: string }>;
 	properties: Array<{ property: string; content: string }>;
 	links: Array<{
@@ -35,6 +36,11 @@ const HTML_ESCAPE_RE = /[&<>"']/g;
 
 /** Escape a string for safe use in an HTML attribute value */
 export function escapeHtmlAttr(value: string): string {
+	return value.replace(HTML_ESCAPE_RE, (ch) => HTML_ESCAPE_MAP[ch] ?? ch);
+}
+
+/** Escape a string for safe use in HTML text content */
+function escapeHtmlText(value: string): string {
 	return value.replace(HTML_ESCAPE_RE, (ch) => HTML_ESCAPE_MAP[ch] ?? ch);
 }
 
@@ -76,12 +82,14 @@ export function resolvePageMetadata(
 	contributions: PageMetadataContribution[],
 ): ResolvedPageMetadata {
 	const result: ResolvedPageMetadata = {
+		title: null,
 		meta: [],
 		properties: [],
 		links: [],
 		jsonld: [],
 	};
 
+	let seenTitle = false;
 	const seenMeta = new Set<string>();
 	const seenProperties = new Set<string>();
 	const seenLinks = new Set<string>();
@@ -89,6 +97,13 @@ export function resolvePageMetadata(
 
 	for (const c of contributions) {
 		switch (c.kind) {
+			case "title": {
+				const text = c.text.trim();
+				if (!text || seenTitle) continue;
+				seenTitle = true;
+				result.title = text;
+				break;
+			}
 			case "meta": {
 				const dedupeKey = c.key ?? c.name;
 				if (seenMeta.has(dedupeKey)) continue;
@@ -157,6 +172,10 @@ export function resolvePageMetadata(
 /** Render resolved metadata to an HTML string for embedding in <head> */
 export function renderPageMetadata(metadata: ResolvedPageMetadata): string {
 	const parts: string[] = [];
+
+	if (metadata.title && metadata.title.trim()) {
+		parts.push(`<title>${escapeHtmlText(metadata.title)}</title>`);
+	}
 
 	for (const m of metadata.meta) {
 		parts.push(`<meta name="${escapeHtmlAttr(m.name)}" content="${escapeHtmlAttr(m.content)}">`);

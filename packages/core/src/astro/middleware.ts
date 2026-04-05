@@ -176,7 +176,11 @@ function setBaselineSecurityHeaders(response: Response): void {
 }
 
 /** Public routes that require the runtime (sitemap, robots.txt, etc.) */
-const PUBLIC_RUNTIME_ROUTES = new Set(["/sitemap.xml", "/robots.txt"]);
+const SITEMAP_SHARD_ROUTE_RE = /^\/sitemaps\/[^/]+\/[^/]+\/[^/]+\.xml$/;
+
+function isPublicRuntimeRoute(pathname: string): boolean {
+	return pathname === "/sitemap.xml" || pathname === "/robots.txt" || SITEMAP_SHARD_ROUTE_RE.test(pathname);
+}
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const { request, locals, cookies } = context;
@@ -185,7 +189,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	// Process /_emdash routes and public routes with an active session
 	// (logged-in editors need the runtime for toolbar/visual editing on public pages)
 	const isEmDashRoute = url.pathname.startsWith("/_emdash");
-	const isPublicRuntimeRoute = PUBLIC_RUNTIME_ROUTES.has(url.pathname);
+	const isPublicRuntimeRequest = isPublicRuntimeRoute(url.pathname);
 
 	// Check for edit mode cookie - editors viewing public pages need the runtime
 	// so auth middleware can verify their session for visual editing
@@ -197,7 +201,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	// available to getDb() and the runtime's db getter via the correct ALS instance.
 	const playgroundDb = locals.__playgroundDb;
 
-	if (!isEmDashRoute && !isPublicRuntimeRoute && !hasEditCookie && !hasPreviewToken) {
+	if (!isEmDashRoute && !isPublicRuntimeRequest && !hasEditCookie && !hasPreviewToken) {
 		const sessionUser = await context.session?.get("user");
 		if (!sessionUser && !playgroundDb) {
 			// On a fresh deployment the database may be completely empty.
@@ -307,6 +311,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 				// Configuration (for checking database type, auth mode, etc.)
 				config,
+
+				// Check whether a plugin is currently active/enabled
+				isPluginEnabled: runtime.isPluginEnabled.bind(runtime),
 
 				// Manifest invalidation (call after schema changes)
 				invalidateManifest: runtime.invalidateManifest.bind(runtime),

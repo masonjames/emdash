@@ -19,6 +19,14 @@ import {
 import type { PageMetadataContribution } from "../../../src/plugins/types.js";
 
 describe("resolvePageMetadata", () => {
+	it("resolves a document title", () => {
+		const contributions: PageMetadataContribution[] = [{ kind: "title", text: "My Page Title" }];
+
+		const result = resolvePageMetadata(contributions);
+
+		expect(result.title).toBe("My Page Title");
+	});
+
 	it("resolves meta tags correctly", () => {
 		const contributions: PageMetadataContribution[] = [
 			{ kind: "meta", name: "description", content: "A test page" },
@@ -92,6 +100,28 @@ describe("resolvePageMetadata", () => {
 
 		expect(result.meta).toHaveLength(1);
 		expect(result.meta[0]!.content).toBe("First");
+	});
+
+	it("first-wins dedupe for title", () => {
+		const contributions: PageMetadataContribution[] = [
+			{ kind: "title", text: "First Title" },
+			{ kind: "title", text: "Second Title" },
+		];
+
+		const result = resolvePageMetadata(contributions);
+
+		expect(result.title).toBe("First Title");
+	});
+
+	it("skips blank title contributions", () => {
+		const contributions: PageMetadataContribution[] = [
+			{ kind: "title", text: "   " },
+			{ kind: "title", text: "Actual Title" },
+		];
+
+		const result = resolvePageMetadata(contributions);
+
+		expect(result.title).toBe("Actual Title");
 	});
 
 	it("first-wins dedupe for meta by explicit key", () => {
@@ -193,6 +223,20 @@ describe("resolvePageMetadata", () => {
 });
 
 describe("renderPageMetadata", () => {
+	it("renders an escaped title tag before other metadata", () => {
+		const html = renderPageMetadata({
+			title: 'A <test> "page"',
+			meta: [{ name: "description", content: "Test description" }],
+			properties: [],
+			links: [],
+			jsonld: [],
+		});
+
+		expect(html).toBe(
+			"<title>A &lt;test&gt; &quot;page&quot;</title>\n<meta name=\"description\" content=\"Test description\">",
+		);
+	});
+
 	it("renders meta tags with escaped attributes", () => {
 		const html = renderPageMetadata({
 			meta: [{ name: 'desc"ription', content: "A <test> & page" }],

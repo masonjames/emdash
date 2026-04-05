@@ -729,6 +729,36 @@ export type UninstallHandler = (event: UninstallEvent, ctx: PluginContext) => Pr
 /** Placement targets for page fragment contributions */
 export type PagePlacement = "head" | "body:start" | "body:end";
 
+export interface PageFaqItem {
+	question: string;
+	answer: string;
+}
+
+export interface PageFaqData {
+	items: PageFaqItem[];
+}
+
+export interface PageHowToStep {
+	name?: string | null;
+	text: string;
+	image?: string | null;
+}
+
+export interface PageHowToData {
+	name?: string | null;
+	description?: string | null;
+	image?: string | null;
+	totalTime?: string | null;
+	supply?: string[];
+	tool?: string[];
+	steps: PageHowToStep[];
+}
+
+export interface PageStructuredData {
+	faq?: PageFaqData | null;
+	howTo?: PageHowToData | null;
+}
+
 /**
  * Describes the page being rendered. Passed to page hooks so plugins
  * can decide what to contribute without fetching content themselves.
@@ -763,6 +793,8 @@ export interface PublicPageContext {
 	};
 	/** Site name for structured data and og:site_name */
 	siteName?: string;
+	/** Explicit page-scoped schema payloads for richer structured data */
+	structuredData?: PageStructuredData;
 }
 
 // ── page:metadata ───────────────────────────────────────────────
@@ -785,6 +817,7 @@ export type PageMetadataLinkRel =
 	| "site.standard.document";
 
 export type PageMetadataContribution =
+	| { kind: "title"; text: string }
 	| { kind: "meta"; name: string; content: string; key?: string }
 	| { kind: "property"; property: string; content: string; key?: string }
 	| { kind: "link"; rel: PageMetadataLinkRel; href: string; hreflang?: string; key?: string }

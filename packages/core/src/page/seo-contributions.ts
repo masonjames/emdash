@@ -1,8 +1,8 @@
 /**
  * Generate base SEO metadata contributions from PublicPageContext.
  *
- * These contributions are prepended BEFORE plugin contributions in
- * resolvePageMetadata(), which uses first-wins dedup. This means
+ * These contributions are appended AFTER plugin contributions in
+ * EmDashHead. Because resolvePageMetadata() uses first-wins dedupe,
  * plugins can override any base SEO tag by contributing the same key.
  *
  * This replaces the per-template SEO.astro components, eliminating
@@ -19,6 +19,7 @@ import { buildBlogPostingJsonLd, buildWebSiteJsonLd } from "./jsonld.js";
 export function generateBaseSeoContributions(page: PublicPageContext): PageMetadataContribution[] {
 	const contributions: PageMetadataContribution[] = [];
 
+	const title = typeof page.title === "string" ? page.title.trim() : "";
 	const description = page.description;
 	const ogTitle = page.seo?.ogTitle || page.title;
 	const ogDescription = page.seo?.ogDescription || description;
@@ -28,6 +29,10 @@ export function generateBaseSeoContributions(page: PublicPageContext): PageMetad
 	const siteName = page.siteName;
 
 	// -- Meta tags --
+
+	if (title) {
+		contributions.push({ kind: "title", text: title });
+	}
 
 	if (description) {
 		contributions.push({ kind: "meta", name: "description", content: description });

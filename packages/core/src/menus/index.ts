@@ -9,6 +9,7 @@ import { sql } from "kysely";
 
 import type { Database } from "../database/types.js";
 import { getDb } from "../loader.js";
+import { resolveContentEntryPath } from "../utils/url-patterns.js";
 import type { Menu, MenuItem, MenuItemRow } from "./types.js";
 
 /**
@@ -243,18 +244,6 @@ async function resolveMenuItem(
 	};
 }
 
-const SLUG_PLACEHOLDER = /\{slug\}/g;
-const ID_PLACEHOLDER = /\{id\}/g;
-
-/**
- * Interpolate a URL pattern with entry data
- *
- * Replaces `{slug}` and `{id}` placeholders.
- */
-function interpolateUrlPattern(pattern: string, slug: string, id: string): string {
-	return pattern.replace(SLUG_PLACEHOLDER, slug).replace(ID_PLACEHOLDER, id);
-}
-
 /**
  * Resolve URL for a content entry (page/post)
  *
@@ -279,11 +268,12 @@ async function resolveContentUrl(
 
 		const row = result.rows[0];
 		if (row) {
-			const pattern = urlPatterns.get(collection);
-			if (pattern) {
-				return interpolateUrlPattern(pattern, row.slug, entryId);
-			}
-			return `/${collection}/${row.slug}`;
+			return resolveContentEntryPath({
+				collection,
+				slug: row.slug,
+				id: entryId,
+				urlPattern: urlPatterns.get(collection),
+			});
 		}
 
 		// Content not found, skip item

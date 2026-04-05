@@ -418,6 +418,8 @@ Contributes typed metadata to `<head>` — meta tags, OpenGraph properties, cano
 
 Core validates, deduplicates, and renders the contributions. Plugins return structured data, never raw HTML.
 
+Templates can also pass explicit page-scoped schema payloads on `event.page.structuredData` for richer metadata plugins like FAQ and HowTo builders.
+
 ```typescript
 "page:metadata": async (event, ctx) => {
   if (event.page.kind !== "content") return null;
@@ -450,6 +452,20 @@ Core validates, deduplicates, and renders the contributions. Plugins return stru
     canonical: string | null;
     image: string | null;
     content?: { collection: string; id: string; slug: string | null };
+    structuredData?: {
+      faq?: {
+        items: Array<{ question: string; answer: string }>;
+      } | null;
+      howTo?: {
+        name?: string | null;
+        description?: string | null;
+        image?: string | null;
+        totalTime?: string | null;
+        supply?: string[];
+        tool?: string[];
+        steps: Array<{ name?: string | null; text: string; image?: string | null }>;
+      } | null;
+    };
   }
 }
 ```

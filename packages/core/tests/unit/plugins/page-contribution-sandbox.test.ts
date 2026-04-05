@@ -15,6 +15,21 @@ import { describe, it, expect } from "vitest";
  */
 
 describe("page contribution sandbox boundary", () => {
+	describe("sandbox metadata validation", () => {
+		it("accepts valid title metadata contributions", async () => {
+			const { isValidMetadataContribution } = await import("../../../src/emdash-runtime.js");
+
+			expect(isValidMetadataContribution({ kind: "title", text: "SEO Title" })).toBe(true);
+		});
+
+		it("rejects malformed title metadata contributions", async () => {
+			const { isValidMetadataContribution } = await import("../../../src/emdash-runtime.js");
+
+			expect(isValidMetadataContribution({ kind: "title" })).toBe(false);
+			expect(isValidMetadataContribution({ kind: "title", text: 42 })).toBe(false);
+		});
+	});
+
 	describe("manifest schema validation", () => {
 		it("should accept page:metadata in manifests", async () => {
 			const { pluginManifestSchema } = await import("../../../src/plugins/manifest-schema.js");
