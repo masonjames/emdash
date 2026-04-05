@@ -241,7 +241,7 @@ function ContentListPage() {
 			queryFn: ({ pageParam }) =>
 				fetchContentList(collection, {
 					locale: activeLocale,
-					cursor: pageParam as string | undefined,
+					cursor: pageParam,
 					limit: 100,
 				}),
 			initialPageParam: undefined as string | undefined,
