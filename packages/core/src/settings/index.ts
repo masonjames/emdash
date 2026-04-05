@@ -203,11 +203,11 @@ export async function setSiteSettings(
 }
 
 /**
-	* Get a single plugin setting by key.
-	*
-	* Plugin settings are stored in the options table under
-	* `plugin:<pluginId>:settings:<key>`.
-	*/
+ * Get a single plugin setting by key.
+ *
+ * Plugin settings are stored in the options table under
+ * `plugin:<pluginId>:settings:<key>`.
+ */
 export async function getPluginSetting<T = unknown>(
 	pluginId: string,
 	key: string,
@@ -217,10 +217,10 @@ export async function getPluginSetting<T = unknown>(
 }
 
 /**
-	* Get a single plugin setting by key (with explicit db).
-	*
-	* @internal Use `getPluginSetting()` in templates and plugin rendering code.
-	*/
+ * Get a single plugin setting by key (with explicit db).
+ *
+ * @internal Use `getPluginSetting()` in templates and plugin rendering code.
+ */
 export async function getPluginSettingWithDb<T = unknown>(
 	pluginId: string,
 	key: string,
@@ -232,23 +232,21 @@ export async function getPluginSettingWithDb<T = unknown>(
 }
 
 /**
-	* Get all persisted plugin settings for a plugin.
-	*
-	* Defaults declared in `admin.settingsSchema` are not materialized
-	* automatically; callers should apply their own fallback defaults.
-	*/
-export async function getPluginSettings(
-	pluginId: string,
-): Promise<Record<string, unknown>> {
+ * Get all persisted plugin settings for a plugin.
+ *
+ * Defaults declared in `admin.settingsSchema` are not materialized
+ * automatically; callers should apply their own fallback defaults.
+ */
+export async function getPluginSettings(pluginId: string): Promise<Record<string, unknown>> {
 	const db = await getDb();
 	return getPluginSettingsWithDb(pluginId, db);
 }
 
 /**
-	* Get all persisted plugin settings for a plugin (with explicit db).
-	*
-	* @internal Use `getPluginSettings()` in templates and plugin rendering code.
-	*/
+ * Get all persisted plugin settings for a plugin (with explicit db).
+ *
+ * @internal Use `getPluginSettings()` in templates and plugin rendering code.
+ */
 export async function getPluginSettingsWithDb(
 	pluginId: string,
 	db: Kysely<Database>,
