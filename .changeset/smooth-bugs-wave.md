@@ -1,5 +1,6 @@
 ---
 "emdash": patch
+"@emdash-cms/marketplace": patch
 ---
 
-Add the `email:status` plugin hook to EmDash core typing and manifest validation, and harden the marketplace deployment path so GitHub OAuth discovery/configuration failures surface clearly during deploys.
+Adds the `email:status` plugin hook to EmDash core typing and hardens marketplace GitHub auth discovery for publish flows.
