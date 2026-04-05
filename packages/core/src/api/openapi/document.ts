@@ -61,7 +61,10 @@ import {
 	createRedirectBody,
 	notFoundListQuery,
 	notFoundPruneBody,
+	notFoundResolveBody,
 	notFoundListResponseSchema,
+	notFoundResolveResponseSchema,
+	notFoundSummaryQuery,
 	notFoundSummaryResponseSchema,
 	redirectListResponseSchema,
 	redirectSchema,
@@ -2022,6 +2025,7 @@ const redirectPaths = {
 			operationId: "getNotFoundSummary",
 			summary: "Get 404 summary grouped by path",
 			tags: ["Redirects"],
+			requestParams: { query: notFoundSummaryQuery },
 			responses: {
 				"200": {
 					description: "404 summary",
@@ -2031,6 +2035,42 @@ const redirectPaths = {
 				},
 				...authErrors,
 				...standardErrors(500),
+			},
+		},
+	},
+	"/_emdash/api/redirects/404s/{id}": {
+		delete: {
+			operationId: "deleteNotFoundEntry",
+			summary: "Delete a single 404 log entry",
+			tags: ["Redirects"],
+			requestParams: {
+				path: z.object({ id: z.string().meta({ description: "404 log entry ID" }) }),
+			},
+			responses: {
+				"200": {
+					description: "Deleted",
+					content: { [JSON_CONTENT]: { schema: successEnvelope(deleteResponseSchema) } },
+				},
+				...authErrors,
+				...standardErrors(404, 500),
+			},
+		},
+	},
+	"/_emdash/api/redirects/404s/resolve": {
+		post: {
+			operationId: "resolveNotFoundPath",
+			summary: "Create a redirect and clear matching 404 log rows",
+			tags: ["Redirects"],
+			requestBody: { content: { [JSON_CONTENT]: { schema: notFoundResolveBody } } },
+			responses: {
+				"201": {
+					description: "Created redirect and cleared matching 404 log rows",
+					content: {
+						[JSON_CONTENT]: { schema: successEnvelope(notFoundResolveResponseSchema) },
+					},
+				},
+				...authErrors,
+				...standardErrors(400, 409, 500),
 			},
 		},
 	},

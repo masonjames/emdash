@@ -34,6 +34,7 @@ import type {
 	PublicPageContext,
 	PageMetadataContribution,
 	PageFragmentContribution,
+	SiteDiscoveryContribution,
 } from "./plugins/types.js";
 import type { FieldType } from "./schema/types.js";
 import { hashString } from "./utils/hash.js";
@@ -46,7 +47,13 @@ interface PageContributions {
 	fragments: PageFragmentContribution[];
 }
 
-const VALID_METADATA_KINDS = new Set(["meta", "property", "link", "jsonld"]);
+interface ResolvedSiteDiscoveryConfig {
+	sitemap: {
+		enabled: boolean;
+	};
+}
+
+const VALID_METADATA_KINDS = new Set(["title", "meta", "property", "link", "jsonld"]);
 
 /** Security-critical allowlist for link rel values from sandboxed plugins */
 const VALID_LINK_REL = new Set([
@@ -68,6 +75,8 @@ function isValidMetadataContribution(c: unknown): c is PageMetadataContribution 
 	if (typeof obj.kind !== "string" || !VALID_METADATA_KINDS.has(obj.kind)) return false;
 
 	switch (obj.kind) {
+		case "title":
+			return typeof obj.text === "string";
 		case "meta":
 			return typeof obj.name === "string" && typeof obj.content === "string";
 		case "property":
@@ -81,6 +90,20 @@ function isValidMetadataContribution(c: unknown): c is PageMetadataContribution 
 		default:
 			return false;
 	}
+}
+
+function isValidSiteDiscoveryContribution(c: unknown): c is SiteDiscoveryContribution {
+	if (!c || typeof c !== "object") return false;
+	const sitemap = Reflect.get(c, "sitemap");
+	if (sitemap == null) {
+		return true;
+	}
+	if (typeof sitemap !== "object") return false;
+	const enabled = Reflect.get(sitemap, "enabled");
+	if (enabled == null) {
+		return true;
+	}
+	return typeof enabled === "boolean";
 }
 
 import { loadBundleFromR2 } from "./api/handlers/marketplace.js";
@@ -125,7 +148,11 @@ import {
 import { getDb } from "./loader.js";
 import { CronExecutor, type InvokeCronHookFn } from "./plugins/cron.js";
 import { definePlugin } from "./plugins/define-plugin.js";
-import { DEV_CONSOLE_EMAIL_PLUGIN_ID, devConsoleEmailDeliver } from "./plugins/email-console.js";
+import {
+	DEV_CONSOLE_EMAIL_PLUGIN_ID,
+	devConsoleEmailDeliver,
+	devConsoleEmailStatus,
+} from "./plugins/email-console.js";
 import { EmailPipeline } from "./plugins/email.js";
 import {
 	createHookPipeline,
@@ -632,6 +659,7 @@ export class EmDashRuntime {
 							exclusive: true,
 							handler: devConsoleEmailDeliver,
 						},
+						"email:status": devConsoleEmailStatus,
 					},
 				});
 				allPipelinePlugins.push(devConsolePlugin);
@@ -2087,6 +2115,44 @@ export class EmDashRuntime {
 	async collectPageFragments(page: PublicPageContext): Promise<PageFragmentContribution[]> {
 		const { fragments } = await this.collectPageContributions(page);
 		return fragments;
+	}
+
+	async collectSiteDiscovery(): Promise<ResolvedSiteDiscoveryConfig> {
+		let sitemapEnabled: boolean | undefined;
+
+		if (this.hooks.hasHooks("site:discovery")) {
+			const results = await this.hooks.runSiteDiscovery({});
+			for (const { contribution } of results) {
+				const enabled = contribution.sitemap?.enabled;
+				if (typeof enabled === "boolean" && sitemapEnabled === undefined) {
+					sitemapEnabled = enabled;
+				}
+			}
+		}
+
+		for (const [pluginKey, plugin] of this.sandboxedPlugins) {
+			if (sitemapEnabled !== undefined) break;
+			const [id] = pluginKey.split(":");
+			if (!id || !this.isPluginEnabled(id)) continue;
+
+			try {
+				const result = await plugin.invokeHook("site:discovery", {});
+				if (result != null && isValidSiteDiscoveryContribution(result)) {
+					const enabled = result.sitemap?.enabled;
+					if (typeof enabled === "boolean" && sitemapEnabled === undefined) {
+						sitemapEnabled = enabled;
+					}
+				}
+			} catch (error) {
+				console.error(`EmDash: Sandboxed plugin ${id} site:discovery error:`, error);
+			}
+		}
+
+		return {
+			sitemap: {
+				enabled: sitemapEnabled ?? true,
+			},
+		};
 	}
 
 	private isPluginEnabled(pluginId: string): boolean {

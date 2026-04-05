@@ -26,8 +26,21 @@ const filteredPosts = await Promise.all(
 ---
 
 <Base
-	title={`Posts tagged "${term.label}"`}
-	description={`All posts tagged with ${term.label}`}
+	title={term.label}
+	description={term.description ?? null}
+	archive={{
+		kind: "taxonomy",
+		collection: { slug: "posts", label: "Posts" },
+		taxonomy: {
+			name: "tag",
+			label: "Tags",
+			term: {
+				id: term.id,
+				slug: term.slug,
+				label: term.label,
+			},
+		},
+	}}
 >
 	<section class="archive-section">
 		<header class="archive-header">

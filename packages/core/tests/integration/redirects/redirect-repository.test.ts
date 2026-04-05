@@ -72,6 +72,16 @@ describe("RedirectRepository", () => {
 
 			expect(redirect.isPattern).toBe(false);
 		});
+
+		it("normalizes source and destination paths on create", async () => {
+			const redirect = await repo.create({
+				source: "old//path/",
+				destination: "/new//path/?x=1#frag",
+			});
+
+			expect(redirect.source).toBe("/old/path");
+			expect(redirect.destination).toBe("/new/path?x=1#frag");
+		});
 	});
 
 	describe("findById", () => {
@@ -97,6 +107,12 @@ describe("RedirectRepository", () => {
 		it("finds a redirect by source", async () => {
 			await repo.create({ source: "/old", destination: "/new" });
 			const found = await repo.findBySource("/old");
+			expect(found?.destination).toBe("/new");
+		});
+
+		it("finds redirects by normalized source", async () => {
+			await repo.create({ source: "/old-path/", destination: "/new" });
+			const found = await repo.findBySource("/old-path");
 			expect(found?.destination).toBe("/new");
 		});
 	});
@@ -265,6 +281,25 @@ describe("RedirectRepository", () => {
 			expect(match!.resolvedDestination).toBe("/new");
 		});
 
+		it("matches normalized trailing-slash paths", async () => {
+			await repo.create({ source: "/old/", destination: "/new/" });
+			const match = await repo.matchPath("/old");
+			expect(match).not.toBeNull();
+			expect(match!.resolvedDestination).toBe("/new");
+		});
+
+		it("preserves the request query when destination has none", async () => {
+			await repo.create({ source: "/old", destination: "/new" });
+			const match = await repo.matchPath("/old", { search: "?utm=1" });
+			expect(match!.resolvedDestination).toBe("/new?utm=1");
+		});
+
+		it("does not merge request query when destination already has one", async () => {
+			await repo.create({ source: "/old", destination: "/new?fixed=1" });
+			const match = await repo.matchPath("/old", { search: "?utm=1" });
+			expect(match!.resolvedDestination).toBe("/new?fixed=1");
+		});
+
 		it("does not match disabled redirects", async () => {
 			await repo.create({
 				source: "/old",
@@ -308,6 +343,53 @@ describe("RedirectRepository", () => {
 
 			// Should not match multi-segment
 			expect(await repo.matchPath("/category/a/b")).toBeNull();
+		});
+
+		it("orders competing patterns deterministically", async () => {
+			await repo.create({
+				source: "/docs/[...path]",
+				destination: "/catch-all/[...path]",
+			});
+			await repo.create({
+				source: "/docs/[section]/[slug]",
+				destination: "/specific/[section]/[slug]",
+			});
+
+			const match = await repo.matchPath("/docs/guides/install");
+			expect(match!.resolvedDestination).toBe("/specific/guides/install");
+		});
+
+		it("suppresses redirect loops at runtime", async () => {
+			await repo.create({ source: "/a", destination: "/b" });
+			await repo.create({ source: "/b", destination: "/a" });
+			expect(await repo.matchPath("/a")).toBeNull();
+		});
+
+		it("suppresses concrete loops that involve patterns", async () => {
+			await repo.create({
+				source: "/blog/[slug]",
+				destination: "/[slug]",
+			});
+			await repo.create({
+				source: "/[slug]",
+				destination: "/blog/[slug]",
+			});
+
+			expect(await repo.matchPath("/blog/post-1")).toBeNull();
+		});
+	});
+
+	describe("wouldCreateLoop", () => {
+		it("detects multi-hop exact loops", async () => {
+			await repo.create({ source: "/b", destination: "/c" });
+			await repo.create({ source: "/c", destination: "/a" });
+
+			expect(await repo.wouldCreateLoop("/a", "/b")).toBe(true);
+		});
+
+		it("does not report a loop when the chain terminates", async () => {
+			await repo.create({ source: "/b", destination: "/c" });
+			expect(await repo.wouldCreateLoop("/a", "/b")).toBe(false);
 		});
 	});
 
@@ -403,6 +485,12 @@ describe("RedirectRepository", () => {
 			expect(result.items[0]!.path).toBe("/missing");
 		});
 
+		it("normalizes logged 404 paths", async () => {
+			await repo.log404({ path: "//missing/path/" });
+			const result = await repo.find404s({});
+			expect(result.items[0]!.path).toBe("/missing/path");
+		});
+
 		it("logs with metadata", async () => {
 			await repo.log404({
 				path: "/missing",
@@ -479,6 +567,27 @@ describe("RedirectRepository", () => {
 			await repo.delete404(all.items[0]!.id);
 			const remaining = await repo.find404s({});
 			expect(remaining.items).toHaveLength(1);
+		});
+	});
+
+	describe("delete404sByPath", () => {
+		it("deletes all normalized path variants", async () => {
+			await repo.log404({ path: "/docs/guide" });
+			await db
+				.insertInto("_emdash_404_log")
+				.values({
+					id: "legacy-404-entry",
+					path: "/docs/guide/",
+					referrer: null,
+					user_agent: null,
+					ip: null,
+					created_at: new Date().toISOString(),
+				})
+				.execute();
+
+			const deleted = await repo.delete404sByPath("/docs/guide");
+			expect(deleted).toBe(2);
+			expect((await repo.find404s({})).items).toHaveLength(0);
 		});
 	});
 

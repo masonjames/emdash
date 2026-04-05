@@ -13,16 +13,12 @@
 import type { APIRoute } from "astro";
 
 import { handleSitemapData } from "#api/handlers/seo.js";
+import { buildDefaultSitemapDocument, renderSitemapXml } from "#seo/sitemap.js";
 import { getSiteSettingsWithDb } from "#settings/index.js";
 
 export const prerender = false;
 
 const TRAILING_SLASH_RE = /\/$/;
-const AMP_RE = /&/g;
-const LT_RE = /</g;
-const GT_RE = />/g;
-const QUOT_RE = /"/g;
-const APOS_RE = /'/g;
 
 export const GET: APIRoute = async ({ locals, url }) => {
 	const { emdash } = locals;
@@ -35,6 +31,20 @@ export const GET: APIRoute = async ({ locals, url }) => {
 	}
 
 	try {
+		const discovery =
+			typeof emdash.collectSiteDiscovery === "function"
+				? await emdash.collectSiteDiscovery()
+				: { sitemap: { enabled: true } };
+		if (!discovery.sitemap.enabled) {
+			return new Response("Not Found", {
+				status: 404,
+				headers: {
+					"Content-Type": "text/plain; charset=utf-8",
+					"Cache-Control": "no-store",
+				},
+			});
+		}
+
 		// Determine site URL from settings or request origin
 		const settings = await getSiteSettingsWithDb(emdash.db);
 		const siteUrl = (settings.url || url.origin).replace(TRAILING_SLASH_RE, "");
@@ -48,30 +58,12 @@ export const GET: APIRoute = async ({ locals, url }) => {
 			});
 		}
 
-		const entries = result.data.entries;
+		const document = buildDefaultSitemapDocument({
+			siteUrl,
+			entries: result.data.entries,
+		});
 
-		// Build XML
-		const lines: string[] = [
-			'<?xml version="1.0" encoding="UTF-8"?>',
-			'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-		];
-
-		for (const entry of entries) {
-			// Default URL pattern: /{collection}/{identifier}
-			// Encode path segments to handle slugs with spaces/unicode/reserved chars
-			const loc = `${siteUrl}/${encodeURIComponent(entry.collection)}/${encodeURIComponent(entry.identifier)}`;
-
-			lines.push("  <url>");
-			lines.push(`    <loc>${escapeXml(loc)}</loc>`);
-			lines.push(`    <lastmod>${escapeXml(entry.updatedAt)}</lastmod>`);
-			lines.push("    <changefreq>weekly</changefreq>");
-			lines.push("    <priority>0.7</priority>");
-			lines.push("  </url>");
-		}
-
-		lines.push("</urlset>");
-
-		return new Response(lines.join("\n"), {
+		return new Response(renderSitemapXml(document), {
 			status: 200,
 			headers: {
 				"Content-Type": "application/xml; charset=utf-8",
@@ -85,13 +77,3 @@ export const GET: APIRoute = async ({ locals, url }) => {
 		});
 	}
 };
-
-/** Escape special XML characters in a string */
-function escapeXml(str: string): string {
-	return str
-		.replace(AMP_RE, "&amp;")
-		.replace(LT_RE, "&lt;")
-		.replace(GT_RE, "&gt;")
-		.replace(QUOT_RE, "&quot;")
-		.replace(APOS_RE, "&apos;");
-}

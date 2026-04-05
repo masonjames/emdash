@@ -17,6 +17,7 @@
 import { defineMiddleware } from "astro:middleware";
 
 import { RedirectRepository } from "../../database/repositories/redirect.js";
+import { normalizeRequestPath } from "../../redirects/normalize.js";
 
 /** Paths that should never be intercepted by redirects */
 const SKIP_PREFIXES = ["/_emdash", "/_image"];
@@ -31,7 +32,8 @@ function isRedirectCode(code: number): code is RedirectCode {
 }
 
 export const onRequest = defineMiddleware(async (context, next) => {
-	const { pathname } = context.url;
+	const { pathname, search } = context.url;
+	const normalizedPath = normalizeRequestPath(pathname);
 
 	// Skip internal paths and static assets
 	if (SKIP_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
@@ -48,7 +50,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 	try {
 		const repo = new RedirectRepository(emdash.db);
-		const match = await repo.matchPath(pathname);
+		const match = await repo.matchPath(normalizedPath, { search });
 
 		if (match) {
 			// Reject protocol-relative URLs (e.g. //evil.com or /\evil.com) from interpolation.
@@ -69,12 +71,15 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		const response = await next();
 
 		// Log 404s for unmatched paths (fire-and-forget)
-		if (response.status === 404) {
+		if (
+			response.status === 404 &&
+			(context.request.method === "GET" || context.request.method === "HEAD")
+		) {
 			const referrer = context.request.headers.get("referer") ?? null;
 			const userAgent = context.request.headers.get("user-agent") ?? null;
 			repo
 				.log404({
-					path: pathname,
+					path: normalizedPath,
 					referrer,
 					userAgent,
 				})

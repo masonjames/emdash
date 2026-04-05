@@ -36,6 +36,7 @@ import type {
 	EmailBeforeSendHandler,
 	EmailDeliverHandler,
 	EmailMessage,
+	EmailStatusHandler,
 	PluginContext,
 	ResolvedHook,
 	ResolvedPlugin,
@@ -786,11 +787,13 @@ describe("ctx.email gating", () => {
 	it("ctx.email is defined with email:send capability and available provider", async () => {
 		// Create a provider and pipeline
 		const deliverHandler: EmailDeliverHandler = async () => {};
+		const statusHandler: EmailStatusHandler = async () => true;
 		const provider = createTestPlugin({
 			id: "provider",
 			capabilities: ["email:provide"],
 			hooks: {
 				"email:deliver": createTestHook("provider", deliverHandler, { exclusive: true }),
+				"email:status": createTestHook("provider", statusHandler),
 			},
 		});
 		const hookPipeline = new HookPipeline([provider], { db });
@@ -808,6 +811,8 @@ describe("ctx.email gating", () => {
 
 		expect(ctx.email).toBeDefined();
 		expect(typeof ctx.email!.send).toBe("function");
+		expect(typeof ctx.email!.sendSystem).toBe("function");
+		expect(typeof ctx.email!.isReady).toBe("function");
 	});
 
 	it("ctx.email is undefined when no provider is configured", async () => {
@@ -856,6 +861,72 @@ describe("ctx.email gating", () => {
 		await ctx.email!.send(createTestMessage());
 
 		expect(receivedSource).toBe("forms-plugin");
+	});
+
+	it("ctx.email.sendSystem() routes through pipeline with system source", async () => {
+		let receivedSource: string | undefined;
+		const deliverHandler: EmailDeliverHandler = async (event) => {
+			receivedSource = event.source;
+		};
+
+		const provider = createTestPlugin({
+			id: "provider",
+			capabilities: ["email:provide"],
+			hooks: {
+				"email:deliver": createTestHook("provider", deliverHandler, { exclusive: true }),
+				"email:status": createTestHook("provider", (async () => true) satisfies EmailStatusHandler),
+			},
+		});
+
+		const consumer = createTestPlugin({
+			id: "forms-plugin",
+			capabilities: ["email:send"],
+		});
+
+		const hookPipeline = new HookPipeline([provider], { db });
+		hookPipeline.setExclusiveSelection("email:deliver", "provider");
+		const emailPipeline = new EmailPipeline(hookPipeline);
+
+		const factory = new PluginContextFactory({ db, emailPipeline });
+		const ctx = factory.createContext(consumer);
+
+		await ctx.email!.sendSystem(createTestMessage());
+
+		expect(receivedSource).toBe("system");
+	});
+
+	it("ctx.email.isReady() reflects the selected provider status hook", async () => {
+		const provider = createTestPlugin({
+			id: "provider",
+			capabilities: ["email:provide"],
+			hooks: {
+				"email:deliver": createTestHook(
+					"provider",
+					(async () => {}) satisfies EmailDeliverHandler,
+					{
+						exclusive: true,
+					},
+				),
+				"email:status": createTestHook(
+					"provider",
+					(async () => false) satisfies EmailStatusHandler,
+				),
+			},
+		});
+
+		const consumer = createTestPlugin({
+			id: "forms-plugin",
+			capabilities: ["email:send"],
+		});
+
+		const hookPipeline = new HookPipeline([provider], { db });
+		hookPipeline.setExclusiveSelection("email:deliver", "provider");
+		const emailPipeline = new EmailPipeline(hookPipeline);
+
+		const factory = new PluginContextFactory({ db, emailPipeline });
+		const ctx = factory.createContext(consumer);
+
+		await expect(ctx.email!.isReady()).resolves.toBe(false);
 	});
 });
 

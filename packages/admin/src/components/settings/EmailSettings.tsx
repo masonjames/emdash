@@ -157,14 +157,14 @@ function PipelineStatus({ settings }: { settings: EmailSettingsData | undefined 
 					<WarningCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
 					<div>
 						<p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-							No email provider configured
+							No working email provider configured
 						</p>
 						<p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
-							Install and activate an email provider plugin to enable email features like
-							invitations, magic links, and password recovery.
+							Install, activate, and finish configuring an email provider plugin to enable email
+							features like invitations, magic links, and password recovery.
 						</p>
 						<p className="text-sm text-amber-700 dark:text-amber-300 mt-2">
-							Without an email provider, invite links must be shared manually.
+							Until delivery is ready, invite links must be shared manually.
 						</p>
 					</div>
 				</div>

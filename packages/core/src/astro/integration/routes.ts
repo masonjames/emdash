@@ -591,8 +591,18 @@ export function injectCoreRoutes(injectRoute: InjectRoute): void {
 	});
 
 	injectRoute({
+		pattern: "/_emdash/api/redirects/404s/resolve",
+		entrypoint: resolveRoute("api/redirects/404s/resolve.ts"),
+	});
+
+	injectRoute({
 		pattern: "/_emdash/api/redirects/404s",
 		entrypoint: resolveRoute("api/redirects/404s/index.ts"),
+	});
+
+	injectRoute({
+		pattern: "/_emdash/api/redirects/404s/[id]",
+		entrypoint: resolveRoute("api/redirects/404s/[id].ts"),
 	});
 
 	injectRoute({

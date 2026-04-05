@@ -7,7 +7,7 @@
  *
  */
 
-import type { EmailDeliverEvent, EmailMessage, PluginContext } from "./types.js";
+import type { EmailDeliverEvent, EmailMessage, EmailStatusEvent, PluginContext } from "./types.js";
 
 /** Plugin ID for the dev console email provider */
 export const DEV_CONSOLE_EMAIL_PLUGIN_ID = "emdash-console-email";
@@ -70,4 +70,14 @@ export async function devConsoleEmailDeliver(
 	while (storedEmails.length > MAX_STORED_EMAILS) {
 		storedEmails.shift();
 	}
+}
+
+/**
+ * The email:status handler for the dev console provider.
+ */
+export async function devConsoleEmailStatus(
+	_event: EmailStatusEvent,
+	_ctx: PluginContext,
+): Promise<boolean> {
+	return true;
 }

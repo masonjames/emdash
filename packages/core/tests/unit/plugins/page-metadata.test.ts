@@ -19,6 +19,17 @@ import {
 import type { PageMetadataContribution } from "../../../src/plugins/types.js";
 
 describe("resolvePageMetadata", () => {
+	it("resolves title contributions correctly", () => {
+		const contributions: PageMetadataContribution[] = [
+			{ kind: "title", text: "Hello World" },
+			{ kind: "title", text: "Ignored Later Title" },
+		];
+
+		const result = resolvePageMetadata(contributions);
+
+		expect(result.title).toBe("Hello World");
+	});
+
 	it("resolves meta tags correctly", () => {
 		const contributions: PageMetadataContribution[] = [
 			{ kind: "meta", name: "description", content: "A test page" },
@@ -27,6 +38,7 @@ describe("resolvePageMetadata", () => {
 
 		const result = resolvePageMetadata(contributions);
 
+		expect(result.title).toBeNull();
 		expect(result.meta).toEqual([
 			{ name: "description", content: "A test page" },
 			{ name: "robots", content: "index, follow" },
@@ -195,6 +207,7 @@ describe("resolvePageMetadata", () => {
 describe("renderPageMetadata", () => {
 	it("renders meta tags with escaped attributes", () => {
 		const html = renderPageMetadata({
+			title: null,
 			meta: [{ name: 'desc"ription', content: "A <test> & page" }],
 			properties: [],
 			links: [],
@@ -204,8 +217,23 @@ describe("renderPageMetadata", () => {
 		expect(html).toBe('<meta name="desc&quot;ription" content="A &lt;test&gt; &amp; page">');
 	});
 
+	it("renders title tags before other metadata", () => {
+		const html = renderPageMetadata({
+			title: "Launch <Notes>",
+			meta: [{ name: "description", content: "A test page" }],
+			properties: [],
+			links: [],
+			jsonld: [],
+		});
+
+		expect(html).toBe(
+			'<title>Launch &lt;Notes&gt;</title>\n<meta name="description" content="A test page">',
+		);
+	});
+
 	it("renders property tags", () => {
 		const html = renderPageMetadata({
+			title: null,
 			meta: [],
 			properties: [{ property: "og:title", content: "My Page" }],
 			links: [],
@@ -217,6 +245,7 @@ describe("renderPageMetadata", () => {
 
 	it("renders link tags with hreflang", () => {
 		const html = renderPageMetadata({
+			title: null,
 			meta: [],
 			properties: [],
 			links: [{ rel: "alternate", href: "https://example.com/fr", hreflang: "fr" }],
@@ -229,6 +258,7 @@ describe("renderPageMetadata", () => {
 	it("renders JSON-LD script tags", () => {
 		const json = JSON.stringify({ "@type": "Article" });
 		const html = renderPageMetadata({
+			title: null,
 			meta: [],
 			properties: [],
 			links: [],

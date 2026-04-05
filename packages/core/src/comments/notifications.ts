@@ -87,7 +87,7 @@ export async function sendCommentNotification(params: {
 
 	if (comment.status !== "approved") return false;
 	if (!contentAuthor?.email) return false;
-	if (!email.isAvailable()) return false;
+	if (!(await email.isReady())) return false;
 	if (comment.authorEmail.toLowerCase() === contentAuthor.email.toLowerCase()) return false;
 
 	const message = buildCommentNotificationEmail(contentAuthor.email, {

@@ -430,6 +430,8 @@ export type CronHandler = (event: CronEvent, ctx: PluginContext) => Promise<void
  */
 export interface EmailAccess {
 	send(message: EmailMessage): Promise<void>;
+	sendSystem(message: EmailMessage): Promise<void>;
+	isReady(): Promise<boolean>;
 }
 
 /**
@@ -460,6 +462,11 @@ export interface EmailDeliverEvent {
 }
 
 /**
+ * Event passed to email:status hooks (provider readiness check).
+ */
+export interface EmailStatusEvent {}
+
+/**
  * Event passed to email:afterSend hooks (logging, analytics, fire-and-forget)
  */
 export interface EmailAfterSendEvent {
@@ -480,6 +487,12 @@ export type EmailBeforeSendHandler = (
  * Handler type for email:deliver hooks (exclusive provider).
  */
 export type EmailDeliverHandler = (event: EmailDeliverEvent, ctx: PluginContext) => Promise<void>;
+
+/**
+ * Handler type for email:status hooks.
+ * Returns true when the selected provider is ready to deliver mail.
+ */
+export type EmailStatusHandler = (event: EmailStatusEvent, ctx: PluginContext) => Promise<boolean>;
 
 /**
  * Handler type for email:afterSend hooks (fire-and-forget).
@@ -729,6 +742,121 @@ export type UninstallHandler = (event: UninstallEvent, ctx: PluginContext) => Pr
 /** Placement targets for page fragment contributions */
 export type PagePlacement = "head" | "body:start" | "body:end";
 
+export interface PageFaqItem {
+	question: string;
+	answer: string;
+}
+
+export interface PageFaqData {
+	items: PageFaqItem[];
+}
+
+export interface PageHowToStep {
+	name?: string | null;
+	text: string;
+	image?: string | null;
+}
+
+export interface PageHowToData {
+	name?: string | null;
+	description?: string | null;
+	image?: string | null;
+	totalTime?: string | null;
+	supply?: string[];
+	tool?: string[];
+	steps: PageHowToStep[];
+}
+
+export type PageProductAvailability =
+	| "BackOrder"
+	| "Discontinued"
+	| "InStock"
+	| "InStoreOnly"
+	| "LimitedAvailability"
+	| "OnlineOnly"
+	| "OutOfStock"
+	| "PreOrder"
+	| "PreSale"
+	| "SoldOut";
+
+export type PageOfferItemCondition =
+	| "DamagedCondition"
+	| "NewCondition"
+	| "RefurbishedCondition"
+	| "UsedCondition";
+
+export interface PageProductOffer {
+	url?: string | null;
+	price?: string | number | null;
+	priceCurrency?: string | null;
+	availability?: PageProductAvailability | null;
+	itemCondition?: PageOfferItemCondition | null;
+}
+
+export interface PageProductAggregateRating {
+	ratingValue: number;
+	reviewCount?: number | null;
+	ratingCount?: number | null;
+	bestRating?: number | null;
+	worstRating?: number | null;
+}
+
+export interface PageProductData {
+	name?: string | null;
+	description?: string | null;
+	image?: string | string[] | null;
+	sku?: string | null;
+	brand?: string | null;
+	offers?: PageProductOffer[] | null;
+	aggregateRating?: PageProductAggregateRating | null;
+}
+
+export interface PageReviewData {
+	title?: string | null;
+	body?: string | null;
+	authorName?: string | null;
+	datePublished?: string | null;
+	rating: number;
+	bestRating?: number | null;
+	worstRating?: number | null;
+}
+
+export interface PageStructuredData {
+	faq?: PageFaqData | null;
+	howTo?: PageHowToData | null;
+	product?: PageProductData | null;
+	reviews?: PageReviewData[] | null;
+}
+
+export type PublicPageArchiveContext =
+	| {
+		kind: "collection";
+		collection: {
+			slug: string;
+			label?: string | null;
+		};
+	  }
+	| {
+		kind: "taxonomy";
+		collection?: {
+			slug: string;
+			label?: string | null;
+		};
+		taxonomy: {
+			name: string;
+			label?: string | null;
+			term: {
+				id?: string | null;
+				slug: string;
+				label: string;
+			};
+		};
+	  }
+	| {
+		kind: "search";
+		query: string | null;
+	  };
+
 /**
  * Describes the page being rendered. Passed to page hooks so plugins
  * can decide what to contribute without fetching content themselves.
@@ -743,6 +871,7 @@ export interface PublicPageContext {
 	description: string | null;
 	canonical: string | null;
 	image: string | null;
+	archive?: PublicPageArchiveContext;
 	content?: {
 		collection: string;
 		id: string;
@@ -763,7 +892,24 @@ export interface PublicPageContext {
 	};
 	/** Site name for structured data and og:site_name */
 	siteName?: string;
+	/** Explicit page-scoped structured data passed through by templates */
+	structuredData?: PageStructuredData;
 }
+
+// ── site:discovery ──────────────────────────────────────────────
+
+export interface SiteDiscoveryEvent {}
+
+export interface SiteDiscoveryContribution {
+	sitemap?: {
+		enabled?: boolean;
+	};
+}
+
+export type SiteDiscoveryHandler = (
+	event: SiteDiscoveryEvent,
+	ctx: PluginContext,
+) => SiteDiscoveryContribution | null | Promise<SiteDiscoveryContribution | null>;
 
 // ── page:metadata ───────────────────────────────────────────────
 
@@ -785,6 +931,7 @@ export type PageMetadataLinkRel =
 	| "site.standard.document";
 
 export type PageMetadataContribution =
+	| { kind: "title"; text: string }
 	| { kind: "meta"; name: string; content: string; key?: string }
 	| { kind: "property"; property: string; content: string; key?: string }
 	| { kind: "link"; rel: PageMetadataLinkRel; href: string; hreflang?: string; key?: string }
@@ -868,6 +1015,7 @@ export interface PluginHooks {
 	// Email hooks
 	"email:beforeSend"?: HookConfig<EmailBeforeSendHandler> | EmailBeforeSendHandler;
 	"email:deliver"?: HookConfig<EmailDeliverHandler> | EmailDeliverHandler;
+	"email:status"?: HookConfig<EmailStatusHandler> | EmailStatusHandler;
 	"email:afterSend"?: HookConfig<EmailAfterSendHandler> | EmailAfterSendHandler;
 
 	// Comment hooks
@@ -876,7 +1024,8 @@ export interface PluginHooks {
 	"comment:afterCreate"?: HookConfig<CommentAfterCreateHandler> | CommentAfterCreateHandler;
 	"comment:afterModerate"?: HookConfig<CommentAfterModerateHandler> | CommentAfterModerateHandler;
 
-	// Public page hooks
+	// Public site/page hooks
+	"site:discovery"?: HookConfig<SiteDiscoveryHandler> | SiteDiscoveryHandler;
 	"page:metadata"?: HookConfig<PageMetadataHandler> | PageMetadataHandler;
 	"page:fragments"?: HookConfig<PageFragmentHandler> | PageFragmentHandler;
 }
@@ -1162,11 +1311,13 @@ export interface ResolvedPluginHooks {
 	cron?: ResolvedHook<CronHandler>;
 	"email:beforeSend"?: ResolvedHook<EmailBeforeSendHandler>;
 	"email:deliver"?: ResolvedHook<EmailDeliverHandler>;
+	"email:status"?: ResolvedHook<EmailStatusHandler>;
 	"email:afterSend"?: ResolvedHook<EmailAfterSendHandler>;
 	"comment:beforeCreate"?: ResolvedHook<CommentBeforeCreateHandler>;
 	"comment:moderate"?: ResolvedHook<CommentModerateHandler>;
 	"comment:afterCreate"?: ResolvedHook<CommentAfterCreateHandler>;
 	"comment:afterModerate"?: ResolvedHook<CommentAfterModerateHandler>;
+	"site:discovery"?: ResolvedHook<SiteDiscoveryHandler>;
 	"page:metadata"?: ResolvedHook<PageMetadataHandler>;
 	"page:fragments"?: ResolvedHook<PageFragmentHandler>;
 }

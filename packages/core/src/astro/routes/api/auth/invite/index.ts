@@ -50,9 +50,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
 		const baseUrl = await getSiteBaseUrl(emdash.db, request);
 
 		// Build email sender from the plugin pipeline (if available)
-		const emailSend = emdash.email?.isAvailable()
+		const emailSend = (await emdash.email?.isReady())
 			? (message: { to: string; subject: string; text: string; html?: string }) =>
-					emdash.email!.send(message, "system")
+					emdash.email!.sendSystem(message)
 			: undefined;
 
 		const result = await createInvite(

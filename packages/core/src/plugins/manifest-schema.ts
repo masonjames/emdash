@@ -58,11 +58,13 @@ export const HOOK_NAMES = [
 	"cron",
 	"email:beforeSend",
 	"email:deliver",
+	"email:status",
 	"email:afterSend",
 	"comment:beforeCreate",
 	"comment:moderate",
 	"comment:afterCreate",
 	"comment:afterModerate",
+	"site:discovery",
 	"page:metadata",
 	"page:fragments",
 ] as const;

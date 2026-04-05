@@ -121,6 +121,8 @@ describe("OpenAPI document generation", () => {
 		expect(paths).toContain("/_emdash/api/redirects/{id}");
 		expect(paths).toContain("/_emdash/api/redirects/404s");
 		expect(paths).toContain("/_emdash/api/redirects/404s/summary");
+		expect(paths).toContain("/_emdash/api/redirects/404s/{id}");
+		expect(paths).toContain("/_emdash/api/redirects/404s/resolve");
 	});
 
 	it("includes user paths", () => {
@@ -226,6 +228,8 @@ describe("OpenAPI document generation", () => {
 		expect(operationIds).toContain("listRedirects");
 		expect(operationIds).toContain("createRedirect");
 		expect(operationIds).toContain("listNotFoundEntries");
+		expect(operationIds).toContain("deleteNotFoundEntry");
+		expect(operationIds).toContain("resolveNotFoundPath");
 
 		// User operations
 		expect(operationIds).toContain("listUsers");
@@ -267,6 +271,8 @@ describe("OpenAPI document generation", () => {
 
 		// Menu schemas
 		expect(schemas).toHaveProperty("MenuWithItems");
+		expect(schemas).toHaveProperty("NotFoundResolveBody");
+		expect(schemas).toHaveProperty("NotFoundResolveResponse");
 
 		// User schemas
 		expect(schemas).toHaveProperty("User");

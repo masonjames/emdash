@@ -104,4 +104,62 @@ describe("createPublicPageContext", () => {
 
 		expect(result.content).toBeUndefined();
 	});
+
+	it("passes through explicit structured data payloads", () => {
+		const structuredData = {
+			faq: {
+				items: [{ question: "What is EmDash?", answer: "An Astro-native CMS." }],
+			},
+			howTo: {
+				name: "Install EmDash",
+				steps: [{ text: "Install the package." }],
+			},
+			product: {
+				name: "EmDash Pro",
+				offers: [{ price: "99.00", priceCurrency: "USD" }],
+				aggregateRating: { ratingValue: 4.8, reviewCount: 12 },
+			},
+			reviews: [
+				{
+					title: "Worth it",
+					body: "Excellent publishing workflow.",
+					authorName: "Mason James",
+					rating: 5,
+				},
+			],
+		};
+
+		const result = createPublicPageContext({
+			url: "https://example.com/products/emdash-pro",
+			kind: "content",
+			structuredData,
+		});
+
+		expect(result.structuredData).toEqual(structuredData);
+	});
+
+	it("passes through archive descriptors unchanged", () => {
+		const archive = {
+			kind: "taxonomy" as const,
+			collection: { slug: "posts", label: "Posts" },
+			taxonomy: {
+				name: "tag",
+				label: "Tags",
+				term: {
+					id: "term_1",
+					slug: "astro",
+					label: "Astro",
+				},
+			},
+		};
+
+		const result = createPublicPageContext({
+			url: "https://example.com/tag/astro",
+			kind: "custom",
+			title: "Astro",
+			archive,
+		});
+
+		expect(result.archive).toEqual(archive);
+	});
 });

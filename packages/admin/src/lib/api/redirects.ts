@@ -2,7 +2,13 @@
  * Redirects API client
  */
 
-import { API_BASE, apiFetch, parseApiResponse, throwResponseError } from "./client.js";
+import {
+	API_BASE,
+	apiFetch,
+	parseApiResponse,
+	throwResponseError,
+	type FindManyResult,
+} from "./client.js";
 
 export interface Redirect {
 	id: string;
@@ -17,6 +23,15 @@ export interface Redirect {
 	auto: boolean;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export interface NotFoundEntry {
+	id: string;
+	path: string;
+	referrer: string | null;
+	userAgent: string | null;
+	ip: string | null;
+	createdAt: string;
 }
 
 export interface NotFoundSummary {
@@ -51,25 +66,45 @@ export interface RedirectListOptions {
 	auto?: boolean;
 }
 
-export interface RedirectListResult {
-	items: Redirect[];
-	nextCursor?: string;
+export interface NotFoundListOptions {
+	cursor?: string;
+	limit?: number;
+	search?: string;
+}
+
+export interface NotFoundResolveResult {
+	redirect: Redirect;
+	deleted: number;
+}
+
+export type RedirectListResult = FindManyResult<Redirect>;
+export type NotFoundListResult = FindManyResult<NotFoundEntry>;
+
+function buildQueryString(params: Record<string, string | number | boolean | undefined>): string {
+	const searchParams = new URLSearchParams();
+	for (const [key, value] of Object.entries(params)) {
+		if (value !== undefined && value !== "") {
+			searchParams.set(key, String(value));
+		}
+	}
+	const query = searchParams.toString();
+	return query ? `?${query}` : "";
 }
 
 /**
  * List redirects with optional filters
  */
 export async function fetchRedirects(options?: RedirectListOptions): Promise<RedirectListResult> {
-	const params = new URLSearchParams();
-	if (options?.cursor) params.set("cursor", options.cursor);
-	if (options?.limit != null) params.set("limit", String(options.limit));
-	if (options?.search) params.set("search", options.search);
-	if (options?.group) params.set("group", options.group);
-	if (options?.enabled !== undefined) params.set("enabled", String(options.enabled));
-	if (options?.auto !== undefined) params.set("auto", String(options.auto));
-
-	const url = params.toString() ? `${API_BASE}/redirects?${params}` : `${API_BASE}/redirects`;
-	const response = await apiFetch(url);
+	const response = await apiFetch(
+		`${API_BASE}/redirects${buildQueryString({
+			cursor: options?.cursor,
+			limit: options?.limit,
+			search: options?.search,
+			group: options?.group,
+			enabled: options?.enabled,
+			auto: options?.auto,
+		})}`,
+	);
 	return parseApiResponse<RedirectListResult>(response, "Failed to fetch redirects");
 }
 
@@ -111,16 +146,70 @@ export async function deleteRedirect(id: string): Promise<void> {
  * Fetch 404 summary (grouped by path, sorted by count)
  */
 export async function fetch404Summary(limit?: number): Promise<NotFoundSummary[]> {
-	const params = new URLSearchParams();
-	if (limit != null) params.set("limit", String(limit));
-
-	const url = params.toString()
-		? `${API_BASE}/redirects/404s/summary?${params}`
-		: `${API_BASE}/redirects/404s/summary`;
-	const response = await apiFetch(url);
+	const response = await apiFetch(
+		`${API_BASE}/redirects/404s/summary${buildQueryString({ limit })}`,
+	);
 	const data = await parseApiResponse<{ items: NotFoundSummary[] }>(
 		response,
 		"Failed to fetch 404 summary",
 	);
 	return data.items;
+}
+
+/**
+ * Fetch paginated 404 log entries.
+ */
+export async function fetch404Entries(options?: NotFoundListOptions): Promise<NotFoundListResult> {
+	const response = await apiFetch(
+		`${API_BASE}/redirects/404s${buildQueryString({
+			cursor: options?.cursor,
+			limit: options?.limit,
+			search: options?.search,
+		})}`,
+	);
+	return parseApiResponse<NotFoundListResult>(response, "Failed to fetch 404 log entries");
+}
+
+/**
+ * Delete a single 404 log entry.
+ */
+export async function delete404Entry(id: string): Promise<void> {
+	const response = await apiFetch(`${API_BASE}/redirects/404s/${encodeURIComponent(id)}`, {
+		method: "DELETE",
+	});
+	if (!response.ok) await throwResponseError(response, "Failed to delete 404 log entry");
+}
+
+/**
+ * Clear all 404 log entries.
+ */
+export async function clear404Entries(): Promise<{ deleted: number }> {
+	const response = await apiFetch(`${API_BASE}/redirects/404s`, { method: "DELETE" });
+	return parseApiResponse<{ deleted: number }>(response, "Failed to clear 404 log entries");
+}
+
+/**
+ * Prune 404 log entries older than the provided ISO datetime.
+ */
+export async function prune404Entries(olderThan: string): Promise<{ deleted: number }> {
+	const response = await apiFetch(`${API_BASE}/redirects/404s`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ olderThan }),
+	});
+	return parseApiResponse<{ deleted: number }>(response, "Failed to prune 404 log entries");
+}
+
+/**
+ * Resolve a 404 path by creating a redirect and deleting matching 404 rows.
+ */
+export async function resolve404ToRedirect(
+	input: CreateRedirectInput,
+): Promise<NotFoundResolveResult> {
+	const response = await apiFetch(`${API_BASE}/redirects/404s/resolve`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	return parseApiResponse<NotFoundResolveResult>(response, "Failed to resolve 404 path");
 }

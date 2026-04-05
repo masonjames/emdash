@@ -5,7 +5,11 @@
  * The resulting context is passed to EmDashHead / EmDashBodyStart / EmDashBodyEnd.
  */
 
-import type { PublicPageContext } from "../plugins/types.js";
+import type {
+	PageStructuredData,
+	PublicPageArchiveContext,
+	PublicPageContext,
+} from "../plugins/types.js";
 
 /** Fields shared by both input forms */
 interface PageContextFields {
@@ -15,6 +19,7 @@ interface PageContextFields {
 	description?: string | null;
 	canonical?: string | null;
 	image?: string | null;
+	archive?: PublicPageArchiveContext;
 	content?: { collection: string; id: string; slug?: string | null };
 	/** SEO overrides for OG/Twitter meta generation */
 	seo?: {
@@ -31,6 +36,8 @@ interface PageContextFields {
 	};
 	/** Site name for structured data and og:site_name */
 	siteName?: string;
+	/** Explicit page-scoped structured data */
+	structuredData?: PageStructuredData;
 }
 
 /** Input with Astro global -- used in .astro files */
@@ -79,6 +86,7 @@ export function createPublicPageContext(input: CreatePublicPageContextInput): Pu
 		description: input.description ?? null,
 		canonical: input.canonical ?? null,
 		image: input.image ?? null,
+		archive: input.archive,
 		content: input.content
 			? {
 					collection: input.content.collection,
@@ -89,5 +97,6 @@ export function createPublicPageContext(input: CreatePublicPageContextInput): Pu
 		seo: input.seo,
 		articleMeta: input.articleMeta,
 		siteName: input.siteName,
+		structuredData: input.structuredData,
 	};
 }

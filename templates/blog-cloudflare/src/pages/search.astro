@@ -27,8 +27,12 @@ const results = query ? allPosts.filter((p) => matchesQuery(p, query)) : [];
 ---
 
 <Base
-	title={query ? `Search: ${query}` : "Search"}
-	description="Search blog posts"
+	title={query ? `Search results for "${query}"` : "Search"}
+	description={null}
+	archive={{
+		kind: "search",
+		query: query || null,
+	}}
 >
 	<section class="search-page">
 		<h1 class="search-title">Search</h1>

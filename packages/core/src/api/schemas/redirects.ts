@@ -3,7 +3,7 @@ import { z } from "zod";
 import { cursorPaginationQuery } from "./common.js";
 
 // ---------------------------------------------------------------------------
-// Redirects: Input schemas
+// Helpers
 // ---------------------------------------------------------------------------
 
 const redirectType = z.coerce
@@ -16,31 +16,72 @@ const redirectType = z.coerce
 /** Matches CR or LF characters */
 const CRLF = /[\r\n]/;
 
-/** Path must start with / and not be protocol-relative, contain no CRLF, and no path traversal */
-const urlPath = z
+function splitPathInput(input: string): { pathname: string; search: string; hash: string } {
+	let pathnameAndSearch = input;
+	let hash = "";
+
+	const hashIndex = pathnameAndSearch.indexOf("#");
+	if (hashIndex >= 0) {
+		hash = pathnameAndSearch.slice(hashIndex);
+		pathnameAndSearch = pathnameAndSearch.slice(0, hashIndex);
+	}
+
+	let pathname = pathnameAndSearch;
+	let search = "";
+
+	const queryIndex = pathnameAndSearch.indexOf("?");
+	if (queryIndex >= 0) {
+		pathname = pathnameAndSearch.slice(0, queryIndex);
+		search = pathnameAndSearch.slice(queryIndex);
+	}
+
+	return { pathname, search, hash };
+}
+
+function hasPathTraversal(input: string): boolean {
+	const { pathname } = splitPathInput(input);
+	try {
+		return decodeURIComponent(pathname).split("/").includes("..");
+	} catch {
+		return true;
+	}
+}
+
+const redirectPathBase = z
 	.string()
 	.min(1)
-	.refine((s) => s.startsWith("/") && !s.startsWith("//"), {
-		message: "Must be a path starting with / (no protocol-relative URLs)",
-	})
+	.refine(
+		(s) =>
+			splitPathInput(s).pathname.startsWith("/") && !splitPathInput(s).pathname.startsWith("//"),
+		{
+			message: "Must be a path starting with / (no protocol-relative URLs)",
+		},
+	)
 	.refine((s) => !CRLF.test(s), {
 		message: "URL must not contain newline characters",
 	})
-	.refine(
-		(s) => {
-			try {
-				return !decodeURIComponent(s).split("/").includes("..");
-			} catch {
-				return false;
-			}
-		},
-		{ message: "URL must not contain path traversal segments" },
-	);
+	.refine((s) => !hasPathTraversal(s), {
+		message: "URL must not contain path traversal segments",
+	});
+
+export const redirectSourcePath = redirectPathBase.refine(
+	(s) => {
+		const { search, hash } = splitPathInput(s);
+		return search === "" && hash === "";
+	},
+	{ message: "Source paths must not include query strings or hash fragments" },
+);
+
+export const redirectDestinationPath = redirectPathBase;
+
+// ---------------------------------------------------------------------------
+// Redirects: Input schemas
+// ---------------------------------------------------------------------------
 
 export const createRedirectBody = z
 	.object({
-		source: urlPath,
-		destination: urlPath,
+		source: redirectSourcePath,
+		destination: redirectDestinationPath,
 		type: redirectType.optional().default(301),
 		enabled: z.boolean().optional().default(true),
 		groupName: z.string().nullish(),
@@ -49,8 +90,8 @@ export const createRedirectBody = z
 
 export const updateRedirectBody = z
 	.object({
-		source: urlPath.optional(),
-		destination: urlPath.optional(),
+		source: redirectSourcePath.optional(),
+		destination: redirectDestinationPath.optional(),
 		type: redirectType.optional(),
 		enabled: z.boolean().optional(),
 		groupName: z.string().nullish(),
@@ -85,15 +126,27 @@ export const notFoundListQuery = cursorPaginationQuery
 	})
 	.meta({ id: "NotFoundListQuery" });
 
-export const notFoundSummaryQuery = z.object({
-	limit: z.coerce.number().int().min(1).max(100).optional().default(50),
-});
+export const notFoundSummaryQuery = z
+	.object({
+		limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+	})
+	.meta({ id: "NotFoundSummaryQuery" });
 
 export const notFoundPruneBody = z
 	.object({
 		olderThan: z.string().datetime({ message: "olderThan must be an ISO 8601 datetime" }),
 	})
 	.meta({ id: "NotFoundPruneBody" });
+
+export const notFoundResolveBody = z
+	.object({
+		source: redirectSourcePath,
+		destination: redirectDestinationPath,
+		type: redirectType.optional().default(301),
+		enabled: z.boolean().optional().default(true),
+		groupName: z.string().nullish(),
+	})
+	.meta({ id: "NotFoundResolveBody" });
 
 // ---------------------------------------------------------------------------
 // Redirects: Response schemas
@@ -153,3 +206,10 @@ export const notFoundSummarySchema = z
 export const notFoundSummaryResponseSchema = z
 	.object({ items: z.array(notFoundSummarySchema) })
 	.meta({ id: "NotFoundSummaryResponse" });
+
+export const notFoundResolveResponseSchema = z
+	.object({
+		redirect: redirectSchema,
+		deleted: z.number().int(),
+	})
+	.meta({ id: "NotFoundResolveResponse" });

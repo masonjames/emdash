@@ -20,6 +20,7 @@ import type { EmailDeliverEvent, EmailMessage } from "./types.js";
 
 /** Hook name for the exclusive email delivery hook */
 const EMAIL_DELIVER_HOOK = "email:deliver";
+const EMAIL_STATUS_HOOK = "email:status";
 
 /** Source value used for auth emails (magic links, invites, password resets) */
 const SYSTEM_SOURCE = "system";
@@ -122,6 +123,13 @@ export class EmailPipeline {
 	}
 
 	/**
+	 * Send a privileged system email that bypasses email middleware hooks.
+	 */
+	async sendSystem(message: EmailMessage): Promise<void> {
+		await this.send(message, SYSTEM_SOURCE);
+	}
+
+	/**
 	 * Inner send implementation, separated from the recursion guard.
 	 */
 	private async sendInner(message: EmailMessage, source: string): Promise<void> {
@@ -205,5 +213,29 @@ export class EmailPipeline {
 	 */
 	isAvailable(): boolean {
 		return this.pipeline.getExclusiveSelection(EMAIL_DELIVER_HOOK) !== undefined;
+	}
+
+	/**
+	 * Check whether the selected provider is actually ready to deliver mail.
+	 *
+	 * Readiness is stronger than availability: it requires both a selected
+	 * provider and a provider-specific status hook returning true.
+	 */
+	async isReady(): Promise<boolean> {
+		const selectedProviderId = this.pipeline.getExclusiveSelection(EMAIL_DELIVER_HOOK);
+		if (!selectedProviderId) {
+			return false;
+		}
+
+		const statusResult = await this.pipeline.invokeHookForPlugin(
+			EMAIL_STATUS_HOOK,
+			selectedProviderId,
+			{},
+		);
+		if (!statusResult || statusResult.error) {
+			return false;
+		}
+
+		return statusResult.result === true;
 	}
 }

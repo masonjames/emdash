@@ -43,7 +43,7 @@ export const POST: APIRoute = async ({ request, params, locals }) => {
 		}
 
 		// Check if email pipeline is available
-		if (!emdash.email?.isAvailable()) {
+		if (!(await emdash.email?.isReady())) {
 			return apiError(
 				"EMAIL_NOT_CONFIGURED",
 				"Email is not configured. Recovery links require an email provider.",
@@ -59,7 +59,7 @@ export const POST: APIRoute = async ({ request, params, locals }) => {
 		const config: MagicLinkConfig = {
 			baseUrl,
 			siteName,
-			email: (message) => emdash.email!.send(message, "system"),
+			email: (message) => emdash.email!.sendSystem(message),
 		};
 
 		// Send recovery link

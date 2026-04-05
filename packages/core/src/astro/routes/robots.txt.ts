@@ -31,12 +31,17 @@ export const GET: APIRoute = async ({ locals, url }) => {
 		const settings = await getSiteSettingsWithDb(emdash.db);
 		const siteUrl = (settings.url || url.origin).replace(TRAILING_SLASH_RE, "");
 		const sitemapUrl = `${siteUrl}/sitemap.xml`;
+		const discovery =
+			typeof emdash.collectSiteDiscovery === "function"
+				? await emdash.collectSiteDiscovery()
+				: { sitemap: { enabled: true } };
+		const shouldAdvertiseSitemap = discovery.sitemap.enabled;
 
 		// Use custom robots.txt if configured
 		if (settings.seo?.robotsTxt) {
 			// Append sitemap directive if not already present
 			let content = settings.seo.robotsTxt;
-			if (!content.toLowerCase().includes("sitemap:")) {
+			if (shouldAdvertiseSitemap && !content.toLowerCase().includes("sitemap:")) {
 				content = `${content.trimEnd()}\n\nSitemap: ${sitemapUrl}\n`;
 			}
 
@@ -50,16 +55,18 @@ export const GET: APIRoute = async ({ locals, url }) => {
 		}
 
 		// Generate default robots.txt
-		const defaultRobots = [
+		const defaultRobotsLines = [
 			"User-agent: *",
 			"Allow: /",
 			"",
 			"# Disallow admin and API routes",
 			"Disallow: /_emdash/",
-			"",
-			`Sitemap: ${sitemapUrl}`,
-			"",
-		].join("\n");
+		];
+		if (shouldAdvertiseSitemap) {
+			defaultRobotsLines.push("", `Sitemap: ${sitemapUrl}`);
+		}
+		defaultRobotsLines.push("");
+		const defaultRobots = defaultRobotsLines.join("\n");
 
 		return new Response(defaultRobots, {
 			status: 200,

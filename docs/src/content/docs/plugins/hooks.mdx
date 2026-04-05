@@ -410,11 +410,45 @@ Hooks have a default timeout of 5000ms (5 seconds). Increase it for operations t
 
 ## Public Page Hooks
 
-Public page hooks let plugins contribute to the `<head>` and `<body>` of rendered pages. Templates opt in using the `<EmDashHead>`, `<EmDashBodyStart>`, and `<EmDashBodyEnd>` components from `emdash/ui`.
+Public page hooks let plugins contribute to request-time discovery behavior plus the `<head>` and `<body>` of rendered pages. Templates opt in using the `<EmDashHead>`, `<EmDashBodyStart>`, and `<EmDashBodyEnd>` components from `emdash/ui`.
+
+### `site:discovery`
+
+Contributes request-time discovery configuration for core-owned public endpoints like `/sitemap.xml` and `robots.txt`. Plugins contribute settings, not public routes. Works in both trusted and sandboxed modes.
+
+```typescript
+"site:discovery": async (_event, ctx) => {
+  const enabled = await ctx.kv.get<boolean>("settings:sitemap-enabled");
+
+  return {
+    sitemap: {
+      enabled: enabled !== false,
+    },
+  };
+}
+```
+
+**Returns:** `SiteDiscoveryContribution | null`
+
+**Contribution shape:**
+
+```typescript
+{
+  sitemap?: {
+    enabled?: boolean;
+  };
+}
+```
+
+First contributed value wins for each field. Current core defaults are equivalent to:
+
+```typescript
+{ sitemap: { enabled: true } }
+```
 
 ### `page:metadata`
 
-Contributes typed metadata to `<head>` — meta tags, OpenGraph properties, canonical/alternate links, and JSON-LD structured data. Works in both trusted and sandboxed modes.
+Contributes typed metadata to `<head>` — document titles, meta tags, OpenGraph properties, canonical/alternate links, and JSON-LD structured data. Works in both trusted and sandboxed modes.
 
 Core validates, deduplicates, and renders the contributions. Plugins return structured data, never raw HTML.
 
@@ -449,21 +483,66 @@ Core validates, deduplicates, and renders the contributions. Plugins return stru
     description: string | null;
     canonical: string | null;
     image: string | null;
+    archive?:
+      | {
+          kind: "collection";
+          collection: { slug: string; label?: string | null };
+        }
+      | {
+          kind: "taxonomy";
+          collection?: { slug: string; label?: string | null };
+          taxonomy: {
+            name: string;
+            label?: string | null;
+            term: {
+              id?: string | null;
+              slug: string;
+              label: string;
+            };
+          };
+        }
+      | {
+          kind: "search";
+          query: string | null;
+        };
     content?: { collection: string; id: string; slug: string | null };
+    seo?: {
+      ogTitle?: string | null;
+      ogDescription?: string | null;
+      ogImage?: string | null;
+      robots?: string | null;
+    };
+    articleMeta?: {
+      publishedTime?: string | null;
+      modifiedTime?: string | null;
+      author?: string | null;
+    };
+    siteName?: string;
+    structuredData?: {
+      faq?: PageFaqData | null;
+      howTo?: PageHowToData | null;
+      product?: PageProductData | null;
+      reviews?: PageReviewData[] | null;
+    };
   }
 }
 ```
+
+`archive` is explicit template-provided page identity for collection indexes, taxonomy term archives, and search pages. Use it when plugins need archive-aware defaults. Do not overload `pageType` or infer archive type from paths.
+
+`structuredData` is explicit template-provided page context. It is the intended path for schema modules like FAQ, HowTo, Product, and Review. Plugins should not infer those payloads by scraping rendered HTML.
 
 **Returns:** `PageMetadataContribution | PageMetadataContribution[] | null`
 
 **Contribution types:**
 
-| Kind       | Renders                                            | Dedupe key              |
-| ---------- | -------------------------------------------------- | ----------------------- |
-| `meta`     | `<meta name="..." content="...">`                  | `key` or `name`         |
-| `property` | `<meta property="..." content="...">`              | `key` or `property`     |
+| Kind       | Renders                                            | Dedupe key                                       |
+| ---------- | -------------------------------------------------- | ------------------------------------------------ |
+| `title`    | `<title>...</title>`                               | singleton; first contribution wins               |
+| `meta`     | `<meta name="..." content="...">`                  | `key` or `name`                                  |
+| `property` | `<meta property="..." content="...">`              | `key` or `property`                              |
 | `link`     | `<link rel="canonical\|alternate" href="...">`     | canonical: singleton; alternate: `key` or `hreflang` |
-| `jsonld`   | `<script type="application/ld+json">`              | `id` (if present)       |
+| `jsonld`   | `<script type="application/ld+json">`              | `id` (if present)                                |
 
 First contribution wins for any dedupe key. Link hrefs must be HTTP or HTTPS.
 
@@ -506,5 +585,6 @@ Placements: `"head"`, `"body:start"`, `"body:end"`. Templates that omit a compon
 | `content:afterDelete`  | After content delete      | `void`                        |
 | `media:beforeUpload`   | Before file upload        | Modified file info or `void`  |
 | `media:afterUpload`    | After file upload         | `void`                        |
+| `site:discovery`       | Discovery route request   | Contribution or `null`        |
 | `page:metadata`        | Page render               | Contributions or `null`       |
 | `page:fragments`       | Page render (trusted)     | Contributions or `null`       |

@@ -25,6 +25,7 @@ import type {
 	EmailBeforeSendEvent,
 	EmailBeforeSendHandler,
 	EmailDeliverHandler,
+	EmailStatusHandler,
 	EmailAfterSendHandler,
 	ContentBeforeSaveHandler,
 	ContentAfterSaveHandler,
@@ -43,6 +44,9 @@ import type {
 	CommentAfterCreateHandler,
 	CommentAfterModerateEvent,
 	CommentAfterModerateHandler,
+	SiteDiscoveryEvent,
+	SiteDiscoveryHandler,
+	SiteDiscoveryContribution,
 	PageMetadataEvent,
 	PageMetadataHandler,
 	PageMetadataContribution,
@@ -66,11 +70,13 @@ type HookNameV2 =
 	| "cron"
 	| "email:beforeSend"
 	| "email:deliver"
+	| "email:status"
 	| "email:afterSend"
 	| "comment:beforeCreate"
 	| "comment:moderate"
 	| "comment:afterCreate"
 	| "comment:afterModerate"
+	| "site:discovery"
 	| "page:metadata"
 	| "page:fragments";
 
@@ -91,11 +97,13 @@ interface HookHandlerMap {
 	cron: CronHandler;
 	"email:beforeSend": EmailBeforeSendHandler;
 	"email:deliver": EmailDeliverHandler;
+	"email:status": EmailStatusHandler;
 	"email:afterSend": EmailAfterSendHandler;
 	"comment:beforeCreate": CommentBeforeCreateHandler;
 	"comment:moderate": CommentModerateHandler;
 	"comment:afterCreate": CommentAfterCreateHandler;
 	"comment:afterModerate": CommentAfterModerateHandler;
+	"site:discovery": SiteDiscoveryHandler;
 	"page:metadata": PageMetadataHandler;
 	"page:fragments": PageFragmentHandler;
 }
@@ -216,11 +224,13 @@ export class HookPipeline {
 			this.registerPluginHook(plugin, "cron");
 			this.registerPluginHook(plugin, "email:beforeSend");
 			this.registerPluginHook(plugin, "email:deliver");
+			this.registerPluginHook(plugin, "email:status");
 			this.registerPluginHook(plugin, "email:afterSend");
 			this.registerPluginHook(plugin, "comment:beforeCreate");
 			this.registerPluginHook(plugin, "comment:moderate");
 			this.registerPluginHook(plugin, "comment:afterCreate");
 			this.registerPluginHook(plugin, "comment:afterModerate");
+			this.registerPluginHook(plugin, "site:discovery");
 			this.registerPluginHook(plugin, "page:metadata");
 			this.registerPluginHook(plugin, "page:fragments");
 		}
@@ -243,6 +253,7 @@ export class HookPipeline {
 		["email:beforeSend", "email:intercept"],
 		["email:afterSend", "email:intercept"],
 		["email:deliver", "email:provide"],
+		["email:status", "email:provide"],
 		// Content — beforeSave can mutate content, so requires write:content.
 		// afterSave is read-only notification, so read:content suffices.
 		["content:beforeSave", "write:content"],
@@ -968,8 +979,43 @@ export class HookPipeline {
 	}
 
 	// =========================================================================
-	// Public Page Hooks
+	// Public Site/Page Hooks
 	// =========================================================================
+
+	/**
+	 * Run site:discovery hooks. Each handler returns additive request-time
+	 * discovery settings such as sitemap enablement. Errors are logged but
+	 * don't propagate.
+	 */
+	async runSiteDiscovery(
+		event: SiteDiscoveryEvent,
+	): Promise<Array<{ pluginId: string; contribution: SiteDiscoveryContribution }>> {
+		const hooks = this.getTypedHooks("site:discovery");
+		const results: Array<{ pluginId: string; contribution: SiteDiscoveryContribution }> = [];
+
+		for (const hook of hooks) {
+			const { handler } = hook;
+			const ctx = this.getContext(hook.pluginId);
+
+			try {
+				const result = await this.executeWithTimeout(
+					() => Promise.resolve(handler(event, ctx)),
+					hook.timeout,
+				);
+
+				if (result != null) {
+					results.push({ pluginId: hook.pluginId, contribution: result });
+				}
+			} catch (error) {
+				console.error(
+					`[site:discovery] Plugin "${hook.pluginId}" error:`,
+					error instanceof Error ? error.message : error,
+				);
+			}
+		}
+
+		return results;
+	}
 
 	/**
 	 * Run page:metadata hooks. Each handler returns contributions that are
@@ -1148,6 +1194,35 @@ export class HookPipeline {
 			return {
 				result: undefined,
 				pluginId: selectedPluginId,
+				error: error instanceof Error ? error : new Error(String(error)),
+				duration: Date.now() - start,
+			};
+		}
+	}
+
+	/**
+	 * Invoke a hook for a specific plugin.
+	 * Returns null when the plugin has not registered the hook.
+	 */
+	async invokeHookForPlugin(
+		hookName: string,
+		pluginId: string,
+		event: unknown,
+	): Promise<{ result: unknown; pluginId: string; error?: Error; duration: number } | null> {
+		const hooks = this.hooks.get(hookName as HookNameV2) ?? [];
+		const hook = hooks.find((candidate) => candidate.pluginId === pluginId);
+		if (!hook) return null;
+
+		const start = Date.now();
+		try {
+			const ctx = this.getContext(pluginId);
+			const handler = hook.handler as (event: unknown, ctx: PluginContext) => Promise<unknown>;
+			const result = await this.executeWithTimeout(() => handler(event, ctx), hook.timeout);
+			return { result, pluginId, duration: Date.now() - start };
+		} catch (error) {
+			return {
+				result: undefined,
+				pluginId,
 				error: error instanceof Error ? error : new Error(String(error)),
 				duration: Date.now() - start,
 			};

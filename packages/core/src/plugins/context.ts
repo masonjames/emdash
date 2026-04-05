@@ -798,6 +798,8 @@ export class PluginContextFactory {
 			const pluginId = plugin.id;
 			email = {
 				send: (message) => pipeline.send(message, pluginId),
+				sendSystem: (message) => pipeline.sendSystem(message),
+				isReady: () => pipeline.isReady(),
 			};
 		}
 

@@ -131,9 +131,11 @@ export type {
 	EmailMessage,
 	EmailBeforeSendEvent,
 	EmailDeliverEvent,
+	EmailStatusEvent,
 	EmailAfterSendEvent,
 	EmailBeforeSendHandler,
 	EmailDeliverHandler,
+	EmailStatusHandler,
 	EmailAfterSendHandler,
 
 	// Handler types

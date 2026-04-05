@@ -64,7 +64,7 @@ export const GET: APIRoute = async ({ locals }) => {
 		// TODO: Add getHookProviders() for non-exclusive hooks to the pipeline.
 
 		return apiSuccess({
-			available: emdash.email?.isAvailable() ?? false,
+			available: (await emdash.email?.isReady()) ?? false,
 			providers: providers.map((p) => ({
 				pluginId: p.pluginId,
 			})),
@@ -99,7 +99,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 	const denied = requirePerm(user, "settings:manage");
 	if (denied) return denied;
 
-	if (!emdash.email?.isAvailable()) {
+	if (!(await emdash.email?.isReady())) {
 		return apiError(
 			"EMAIL_NOT_CONFIGURED",
 			"No email provider is configured. Install and activate an email provider plugin.",

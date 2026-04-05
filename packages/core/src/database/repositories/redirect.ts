@@ -2,6 +2,13 @@ import { sql, type Kysely } from "kysely";
 import { ulid } from "ulidx";
 
 import {
+	buildRedirectLocation,
+	normalizeRedirectDestination,
+	normalizeRedirectSourcePath,
+	normalizeRequestPath,
+	normalizedPathnameEquals,
+} from "../../redirects/normalize.js";
+import {
 	compilePattern,
 	matchPattern,
 	interpolateDestination,
@@ -70,6 +77,11 @@ export interface RedirectMatch {
 	resolvedDestination: string;
 }
 
+type MatchPathOptions = {
+	search?: string;
+	maxHops?: number;
+};
+
 // ---------------------------------------------------------------------------
 // Row mapping
 // ---------------------------------------------------------------------------
@@ -91,6 +103,70 @@ function rowToRedirect(row: RedirectTable): Redirect {
 	};
 }
 
+function compareRedirectIdentity(a: Redirect, b: Redirect): number {
+	return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+}
+
+function getPatternMetrics(source: string): {
+	staticSegments: number;
+	catchAllSegments: number;
+	totalSegments: number;
+} {
+	const segments = normalizeRequestPath(source).split("/").filter(Boolean);
+
+	let staticSegments = 0;
+	let catchAllSegments = 0;
+
+	for (const segment of segments) {
+		const isDynamic = segment.startsWith("[") && segment.endsWith("]");
+		const isCatchAll = segment.startsWith("[...") && segment.endsWith("]");
+		if (!isDynamic) {
+			staticSegments += 1;
+		}
+		if (isCatchAll) {
+			catchAllSegments += 1;
+		}
+	}
+
+	return {
+		staticSegments,
+		catchAllSegments,
+		totalSegments: segments.length,
+	};
+}
+
+function comparePatternPrecedence(a: Redirect, b: Redirect): number {
+	const aMetrics = getPatternMetrics(a.source);
+	const bMetrics = getPatternMetrics(b.source);
+
+	if (aMetrics.staticSegments !== bMetrics.staticSegments) {
+		return bMetrics.staticSegments - aMetrics.staticSegments;
+	}
+
+	if (aMetrics.catchAllSegments !== bMetrics.catchAllSegments) {
+		return aMetrics.catchAllSegments - bMetrics.catchAllSegments;
+	}
+
+	if (aMetrics.totalSegments !== bMetrics.totalSegments) {
+		return bMetrics.totalSegments - aMetrics.totalSegments;
+	}
+
+	return compareRedirectIdentity(a, b);
+}
+
+function normalizeAutoRedirectPath(
+	urlPattern: string | null,
+	collection: string,
+	slug: string,
+	contentId: string,
+): string {
+	const rawPath = urlPattern
+		? urlPattern.replace("{slug}", slug).replace("{id}", contentId)
+		: `/${collection}/${slug}`;
+
+	return normalizeRedirectDestination(rawPath).href;
+}
+
 // ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
@@ -110,12 +186,28 @@ export class RedirectRepository {
 	}
 
 	async findBySource(source: string): Promise<Redirect | null> {
-		const row = await this.db
+		const direct = await this.db
 			.selectFrom("_emdash_redirects")
 			.selectAll()
 			.where("source", "=", source)
 			.executeTakeFirst();
-		return row ? rowToRedirect(row) : null;
+		if (direct) {
+			return rowToRedirect(direct);
+		}
+
+		const normalizedSource = normalizeRedirectSourcePath(source);
+		if (normalizedSource !== source) {
+			const normalized = await this.db
+				.selectFrom("_emdash_redirects")
+				.selectAll()
+				.where("source", "=", normalizedSource)
+				.executeTakeFirst();
+			if (normalized) {
+				return rowToRedirect(normalized);
+			}
+		}
+
+		return this.findRedirectWithNormalizedSource(normalizedSource);
 	}
 
 	async findMany(opts: {
@@ -181,14 +273,16 @@ export class RedirectRepository {
 	async create(input: CreateRedirectInput): Promise<Redirect> {
 		const id = ulid();
 		const now = new Date().toISOString();
-		const patternFlag = input.isPattern ?? isPattern(input.source);
+		const normalizedSource = normalizeRedirectSourcePath(input.source);
+		const normalizedDestination = normalizeRedirectDestination(input.destination).href;
+		const patternFlag = input.isPattern ?? isPattern(normalizedSource);
 
 		await this.db
 			.insertInto("_emdash_redirects")
 			.values({
 				id,
-				source: input.source,
-				destination: input.destination,
+				source: normalizedSource,
+				destination: normalizedDestination,
 				type: input.type ?? 301,
 				is_pattern: patternFlag ? 1 : 0,
 				enabled: input.enabled !== false ? 1 : 0,
@@ -212,14 +306,23 @@ export class RedirectRepository {
 		const values: Record<string, unknown> = { updated_at: now };
 
 		if (input.source !== undefined) {
-			values.source = input.source;
+			const normalizedSource = normalizeRedirectSourcePath(input.source);
+			values.source = normalizedSource;
 			values.is_pattern =
-				input.isPattern !== undefined ? (input.isPattern ? 1 : 0) : isPattern(input.source) ? 1 : 0;
+				input.isPattern !== undefined
+					? input.isPattern
+						? 1
+						: 0
+					: isPattern(normalizedSource)
+						? 1
+						: 0;
 		} else if (input.isPattern !== undefined) {
 			values.is_pattern = input.isPattern ? 1 : 0;
 		}
 
-		if (input.destination !== undefined) values.destination = input.destination;
+		if (input.destination !== undefined) {
+			values.destination = normalizeRedirectDestination(input.destination).href;
+		}
 		if (input.type !== undefined) values.type = input.type;
 		if (input.enabled !== undefined) values.enabled = input.enabled ? 1 : 0;
 		if (input.groupName !== undefined) values.group_name = input.groupName;
@@ -239,15 +342,57 @@ export class RedirectRepository {
 
 	// --- Matching -----------------------------------------------------------
 
-	async findExactMatch(path: string): Promise<Redirect | null> {
-		const row = await this.db
+	private async findRedirectWithNormalizedSource(
+		source: string,
+		excludeId?: string,
+	): Promise<Redirect | null> {
+		const normalizedSource = normalizeRedirectSourcePath(source);
+		const rows = await this.db.selectFrom("_emdash_redirects").selectAll().execute();
+
+		const matches = rows
+			.map(rowToRedirect)
+			.filter((redirect) => {
+				if (excludeId && redirect.id === excludeId) {
+					return false;
+				}
+
+				return normalizedPathnameEquals(redirect.source, normalizedSource);
+			})
+			.toSorted(compareRedirectIdentity);
+
+		return matches[0] ?? null;
+	}
+
+	private async findExactMatch(path: string): Promise<Redirect | null> {
+		const normalizedPath = normalizeRequestPath(path);
+		const directCandidates = [...new Set([path, normalizedPath])];
+
+		for (const candidate of directCandidates) {
+			const row = await this.db
+				.selectFrom("_emdash_redirects")
+				.selectAll()
+				.where("source", "=", candidate)
+				.where("enabled", "=", 1)
+				.where("is_pattern", "=", 0)
+				.executeTakeFirst();
+			if (row) {
+				return rowToRedirect(row);
+			}
+		}
+
+		const rows = await this.db
 			.selectFrom("_emdash_redirects")
 			.selectAll()
-			.where("source", "=", path)
 			.where("enabled", "=", 1)
 			.where("is_pattern", "=", 0)
-			.executeTakeFirst();
-		return row ? rowToRedirect(row) : null;
+			.execute();
+
+		const matches = rows
+			.map(rowToRedirect)
+			.filter((redirect) => normalizedPathnameEquals(redirect.source, normalizedPath))
+			.toSorted(compareRedirectIdentity);
+
+		return matches[0] ?? null;
 	}
 
 	async findEnabledPatternRules(): Promise<Redirect[]> {
@@ -260,30 +405,126 @@ export class RedirectRepository {
 		return rows.map(rowToRedirect);
 	}
 
-	/**
-	 * Match a request path against all enabled redirect rules.
-	 * Checks exact matches first (indexed), then pattern rules.
-	 * Returns the matched redirect and the resolved destination URL.
-	 */
-	async matchPath(path: string): Promise<RedirectMatch | null> {
-		// 1. Exact match (fast, indexed)
-		const exact = await this.findExactMatch(path);
-		if (exact) {
-			return { redirect: exact, resolvedDestination: exact.destination };
-		}
+	private sortPatternRulesForMatching(rules: Redirect[]): Redirect[] {
+		return rules.toSorted(comparePatternPrecedence);
+	}
 
-		// 2. Pattern match
-		const patterns = await this.findEnabledPatternRules();
-		for (const redirect of patterns) {
-			const compiled = compilePattern(redirect.source);
-			const params = matchPattern(compiled, path);
-			if (params) {
+	private findBestPatternMatch(
+		path: string,
+		rules: Redirect[],
+		requestSearch?: string,
+	): RedirectMatch | null {
+		for (const redirect of this.sortPatternRulesForMatching(rules)) {
+			try {
+				const compiled = compilePattern(normalizeRedirectSourcePath(redirect.source));
+				const params = matchPattern(compiled, path);
+				if (!params) {
+					continue;
+				}
+
 				const resolved = interpolateDestination(redirect.destination, params);
-				return { redirect, resolvedDestination: resolved };
+				return {
+					redirect,
+					resolvedDestination: buildRedirectLocation(resolved, requestSearch),
+				};
+			} catch {
+				continue;
 			}
 		}
 
 		return null;
+	}
+
+	private async findConcreteMatchWithoutLoopCheck(
+		path: string,
+		options: MatchPathOptions = {},
+	): Promise<RedirectMatch | null> {
+		const normalizedPath = normalizeRequestPath(path);
+		const exact = await this.findExactMatch(normalizedPath);
+		if (exact) {
+			return {
+				redirect: exact,
+				resolvedDestination: buildRedirectLocation(exact.destination, options.search),
+			};
+		}
+
+		const patterns = await this.findEnabledPatternRules();
+		return this.findBestPatternMatch(normalizedPath, patterns, options.search);
+	}
+
+	private async countEnabledRules(): Promise<number> {
+		const result = await sql<{ count: number | string }>`
+			SELECT COUNT(*) as count
+			FROM _emdash_redirects
+			WHERE enabled = 1
+		`.execute(this.db);
+
+		return Number(result.rows[0]?.count ?? 0);
+	}
+
+	private async wouldLoopForConcretePath(
+		startPath: string,
+		firstDestination: string,
+		opts: { maxHops?: number } = {},
+	): Promise<boolean> {
+		const visited = new Set<string>([normalizeRequestPath(startPath)]);
+		let currentPath = normalizeRedirectDestination(firstDestination).pathname;
+		const maxHops = opts.maxHops ?? (await this.countEnabledRules()) + 1;
+
+		for (let hop = 0; hop < maxHops; hop += 1) {
+			const normalizedCurrent = normalizeRequestPath(currentPath);
+			if (visited.has(normalizedCurrent)) {
+				return true;
+			}
+
+			visited.add(normalizedCurrent);
+			const nextMatch = await this.findConcreteMatchWithoutLoopCheck(normalizedCurrent);
+			if (!nextMatch) {
+				return false;
+			}
+
+			currentPath = normalizeRedirectDestination(nextMatch.resolvedDestination).pathname;
+		}
+
+		return true;
+	}
+
+	async wouldCreateLoop(
+		source: string,
+		destination: string,
+		opts: { maxHops?: number } = {},
+	): Promise<boolean> {
+		return this.wouldLoopForConcretePath(
+			normalizeRedirectSourcePath(source),
+			normalizeRedirectDestination(destination).href,
+			opts,
+		);
+	}
+
+	/**
+	 * Match a request path against all enabled redirect rules.
+	 * Checks exact matches first, then pattern rules. Query strings are ignored
+	 * for matching but preserved when the destination has no query of its own.
+	 */
+	async matchPath(path: string, options: MatchPathOptions = {}): Promise<RedirectMatch | null> {
+		const normalizedPath = normalizeRequestPath(path);
+		const match = await this.findConcreteMatchWithoutLoopCheck(normalizedPath, options);
+		if (!match) {
+			return null;
+		}
+
+		const wouldLoop = await this.wouldLoopForConcretePath(
+			normalizedPath,
+			match.resolvedDestination,
+			{
+				maxHops: options.maxHops,
+			},
+		);
+		if (wouldLoop) {
+			return null;
+		}
+
+		return match;
 	}
 
 	// --- Hit tracking -------------------------------------------------------
@@ -310,20 +551,13 @@ export class RedirectRepository {
 		contentId: string,
 		urlPattern: string | null,
 	): Promise<Redirect> {
-		const oldUrl = urlPattern
-			? urlPattern.replace("{slug}", oldSlug).replace("{id}", contentId)
-			: `/${collection}/${oldSlug}`;
-		const newUrl = urlPattern
-			? urlPattern.replace("{slug}", newSlug).replace("{id}", contentId)
-			: `/${collection}/${newSlug}`;
+		const oldUrl = normalizeAutoRedirectPath(urlPattern, collection, oldSlug, contentId);
+		const newUrl = normalizeAutoRedirectPath(urlPattern, collection, newSlug, contentId);
 
-		// Collapse chains: update any existing redirects pointing to the old URL
 		await this.collapseChains(oldUrl, newUrl);
 
-		// Check if a redirect from this source already exists
 		const existing = await this.findBySource(oldUrl);
 		if (existing) {
-			// Update the existing redirect to point to the new URL
 			return (await this.update(existing.id, { destination: newUrl }))!;
 		}
 
@@ -343,13 +577,28 @@ export class RedirectRepository {
 	 * Returns the number of updated rows.
 	 */
 	async collapseChains(oldDestination: string, newDestination: string): Promise<number> {
+		const normalizedOldPath = normalizeRedirectDestination(oldDestination).pathname;
+		const normalizedNewDestination = normalizeRedirectDestination(newDestination).href;
+		const rows = await this.db
+			.selectFrom("_emdash_redirects")
+			.select(["id", "destination"])
+			.execute();
+
+		const ids = rows
+			.filter((row) => normalizedPathnameEquals(row.destination, normalizedOldPath))
+			.map((row) => row.id);
+
+		if (ids.length === 0) {
+			return 0;
+		}
+
 		const result = await this.db
 			.updateTable("_emdash_redirects")
 			.set({
-				destination: newDestination,
+				destination: normalizedNewDestination,
 				updated_at: new Date().toISOString(),
 			})
-			.where("destination", "=", oldDestination)
+			.where("id", "in", ids)
 			.executeTakeFirst();
 		return Number(result.numUpdatedRows);
 	}
@@ -366,7 +615,7 @@ export class RedirectRepository {
 			.insertInto("_emdash_404_log")
 			.values({
 				id: ulid(),
-				path: entry.path,
+				path: normalizeRequestPath(entry.path),
 				referrer: entry.referrer ?? null,
 				user_agent: entry.userAgent ?? null,
 				ip: entry.ip ?? null,
@@ -463,6 +712,24 @@ export class RedirectRepository {
 			.where("id", "=", id)
 			.executeTakeFirst();
 		return BigInt(result.numDeletedRows) > 0n;
+	}
+
+	async delete404sByPath(path: string): Promise<number> {
+		const normalizedPath = normalizeRequestPath(path);
+		const rows = await this.db.selectFrom("_emdash_404_log").select(["id", "path"]).execute();
+		const ids = rows
+			.filter((row) => normalizedPathnameEquals(row.path, normalizedPath))
+			.map((row) => row.id);
+
+		if (ids.length === 0) {
+			return 0;
+		}
+
+		const result = await this.db
+			.deleteFrom("_emdash_404_log")
+			.where("id", "in", ids)
+			.executeTakeFirst();
+		return Number(result.numDeletedRows);
 	}
 
 	async clear404s(): Promise<number> {

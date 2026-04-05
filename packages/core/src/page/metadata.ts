@@ -10,6 +10,7 @@ import type { PageMetadataContribution, PageMetadataLinkRel } from "../plugins/t
 // ── Resolved output ─────────────────────────────────────────────
 
 export interface ResolvedPageMetadata {
+	title: string | null;
 	meta: Array<{ name: string; content: string }>;
 	properties: Array<{ property: string; content: string }>;
 	links: Array<{
@@ -76,12 +77,14 @@ export function resolvePageMetadata(
 	contributions: PageMetadataContribution[],
 ): ResolvedPageMetadata {
 	const result: ResolvedPageMetadata = {
+		title: null,
 		meta: [],
 		properties: [],
 		links: [],
 		jsonld: [],
 	};
 
+	let hasTitle = false;
 	const seenMeta = new Set<string>();
 	const seenProperties = new Set<string>();
 	const seenLinks = new Set<string>();
@@ -89,6 +92,12 @@ export function resolvePageMetadata(
 
 	for (const c of contributions) {
 		switch (c.kind) {
+			case "title": {
+				if (hasTitle) continue;
+				hasTitle = true;
+				result.title = c.text;
+				break;
+			}
 			case "meta": {
 				const dedupeKey = c.key ?? c.name;
 				if (seenMeta.has(dedupeKey)) continue;
@@ -157,6 +166,10 @@ export function resolvePageMetadata(
 /** Render resolved metadata to an HTML string for embedding in <head> */
 export function renderPageMetadata(metadata: ResolvedPageMetadata): string {
 	const parts: string[] = [];
+
+	if (metadata.title) {
+		parts.push(`<title>${escapeHtmlAttr(metadata.title)}</title>`);
+	}
 
 	for (const m of metadata.meta) {
 		parts.push(`<meta name="${escapeHtmlAttr(m.name)}" content="${escapeHtmlAttr(m.content)}">`);

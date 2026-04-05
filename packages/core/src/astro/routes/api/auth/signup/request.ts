@@ -26,7 +26,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 	}
 
 	// Check if email pipeline is available
-	if (!emdash.email?.isAvailable()) {
+	if (!(await emdash.email?.isReady())) {
 		return apiError(
 			"EMAIL_NOT_CONFIGURED",
 			"Email not configured. Self-signup is unavailable.",
@@ -53,7 +53,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 			{
 				baseUrl,
 				siteName,
-				email: (message) => emdash.email!.send(message, "system"),
+				email: (message) => emdash.email!.sendSystem(message),
 			},
 			adapter,
 			body.email.toLowerCase().trim(),
