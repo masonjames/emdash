@@ -15,7 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { readFile, stat, mkdir, writeFile, rm, copyFile, symlink, readdir } from "node:fs/promises";
-import { resolve, join, extname, basename } from "node:path";
+import { resolve, join, extname } from "node:path";
 
 import { defineCommand } from "citty";
 import consola from "consola";
@@ -27,6 +27,7 @@ import {
 	extractManifest,
 	findNodeBuiltinImports,
 	findBuildOutput,
+	getBuildOutputBaseName,
 	findSourceExports,
 	resolveSourceEntry,
 	calculateDirectorySize,
@@ -38,7 +39,6 @@ import {
 	ICON_SIZE,
 } from "./bundle-utils.js";
 
-const TS_EXT_RE = /\.tsx?$/;
 const SLASH_RE = /\//g;
 const LEADING_AT_RE = /^@/;
 const emdash_SCOPE_RE = /^@emdash-cms\//;
@@ -188,7 +188,7 @@ export const bundleCommand = defineCommand({
 			}
 
 			// Import the built module to get the resolved plugin
-			const mainBaseName = basename(mainEntry).replace(TS_EXT_RE, "");
+			const mainBaseName = getBuildOutputBaseName(mainEntry);
 			const mainOutputPath = await findBuildOutput(mainOutDir, mainBaseName);
 
 			if (!mainOutputPath) {
@@ -261,7 +261,7 @@ export const bundleCommand = defineCommand({
 									alias: { emdash: join(probeShimDir, "emdash.mjs") },
 									treeshake: true,
 								});
-								const backendBaseName = basename(backendEntry).replace(TS_EXT_RE, "");
+								const backendBaseName = getBuildOutputBaseName(backendEntry);
 								const backendProbePath = await findBuildOutput(backendProbeDir, backendBaseName);
 								if (backendProbePath) {
 									const backendModule = (await import(backendProbePath)) as Record<string, unknown>;
@@ -380,7 +380,7 @@ export const bundleCommand = defineCommand({
 					treeshake: true,
 				});
 
-				const backendBaseName = basename(backendEntry).replace(TS_EXT_RE, "");
+				const backendBaseName = getBuildOutputBaseName(backendEntry);
 				const backendOutputPath = await findBuildOutput(join(tmpDir, "backend"), backendBaseName);
 
 				if (backendOutputPath) {
@@ -411,7 +411,7 @@ export const bundleCommand = defineCommand({
 					treeshake: true,
 				});
 
-				const adminBaseName = basename(adminEntry).replace(TS_EXT_RE, "");
+				const adminBaseName = getBuildOutputBaseName(adminEntry);
 				const adminOutputPath = await findBuildOutput(join(tmpDir, "admin"), adminBaseName);
 
 				if (adminOutputPath) {

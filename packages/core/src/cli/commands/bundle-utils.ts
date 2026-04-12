@@ -7,7 +7,7 @@
 
 import { createWriteStream } from "node:fs";
 import { readdir, stat, access } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { basename, resolve, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 import { imageSize } from "image-size";
@@ -36,6 +36,7 @@ const LEADING_DOT_SLASH_RE = /^\.\//;
 const DIST_PREFIX_RE = /^dist\//;
 const MJS_EXT_RE = /\.m?js$/;
 const TS_TO_TSX_RE = /\.ts$/;
+const BUILD_OUTPUT_ENTRY_EXT_RE = /\.(?:[cm]?js|tsx?)$/;
 
 /** Node.js built-in modules that shouldn't appear in sandbox code */
 const NODE_BUILTINS = new Set([
@@ -173,6 +174,14 @@ export function findNodeBuiltinImports(code: string): string[] {
 }
 
 // ── Path resolution ──────────────────────────────────────────────────────────
+
+/**
+ * Get the base name tsdown uses for an entry output.
+ * Handles both source entries (`index.ts`) and built package exports (`index.mjs`).
+ */
+export function getBuildOutputBaseName(entry: string): string {
+	return basename(entry).replace(BUILD_OUTPUT_ENTRY_EXT_RE, "");
+}
 
 /**
  * Find a build output file by base name, checking common extensions.

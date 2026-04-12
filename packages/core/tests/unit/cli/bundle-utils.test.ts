@@ -21,6 +21,7 @@ import {
 	resolveSourceEntry,
 	findNodeBuiltinImports,
 	findBuildOutput,
+	getBuildOutputBaseName,
 	findSourceExports,
 } from "../../../src/cli/commands/bundle-utils.js";
 import type { ResolvedPlugin } from "../../../src/plugins/types.js";
@@ -246,6 +247,16 @@ describe("resolveSourceEntry", () => {
 	it("returns undefined when nothing matches", async () => {
 		const result = await resolveSourceEntry(tempDir, "./dist/missing.mjs");
 		expect(result).toBeUndefined();
+	});
+});
+
+describe("getBuildOutputBaseName", () => {
+	it("strips source and built entry extensions", () => {
+		expect(getBuildOutputBaseName("/tmp/plugin/src/index.ts")).toBe("index");
+		expect(getBuildOutputBaseName("/tmp/plugin/src/admin.tsx")).toBe("admin");
+		expect(getBuildOutputBaseName("/tmp/plugin/dist/index.mjs")).toBe("index");
+		expect(getBuildOutputBaseName("/tmp/plugin/dist/sandbox-entry.js")).toBe("sandbox-entry");
+		expect(getBuildOutputBaseName("/tmp/plugin/dist/worker.cjs")).toBe("worker");
 	});
 });
 
