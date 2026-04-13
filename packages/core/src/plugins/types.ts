@@ -513,6 +513,13 @@ export interface EmailAfterSendEvent {
 }
 
 /**
+ * Event passed to email:status hooks (provider readiness / health checks).
+ */
+export interface EmailStatusEvent {
+	source?: string;
+}
+
+/**
  * Handler type for email:beforeSend hooks.
  * Returns modified message, or false to cancel delivery.
  */
@@ -533,6 +540,12 @@ export type EmailAfterSendHandler = (
 	event: EmailAfterSendEvent,
 	ctx: PluginContext,
 ) => Promise<void>;
+
+/**
+ * Handler type for email:status hooks.
+ * Returns true when the provider is configured and ready to deliver email.
+ */
+export type EmailStatusHandler = (event: EmailStatusEvent, ctx: PluginContext) => Promise<boolean>;
 
 // =============================================================================
 // Comment Types
@@ -968,6 +981,7 @@ export interface PluginHooks {
 	"email:beforeSend"?: HookConfig<EmailBeforeSendHandler> | EmailBeforeSendHandler;
 	"email:deliver"?: HookConfig<EmailDeliverHandler> | EmailDeliverHandler;
 	"email:afterSend"?: HookConfig<EmailAfterSendHandler> | EmailAfterSendHandler;
+	"email:status"?: HookConfig<EmailStatusHandler> | EmailStatusHandler;
 
 	// Comment hooks
 	"comment:beforeCreate"?: HookConfig<CommentBeforeCreateHandler> | CommentBeforeCreateHandler;
@@ -1264,6 +1278,7 @@ export interface ResolvedPluginHooks {
 	"email:beforeSend"?: ResolvedHook<EmailBeforeSendHandler>;
 	"email:deliver"?: ResolvedHook<EmailDeliverHandler>;
 	"email:afterSend"?: ResolvedHook<EmailAfterSendHandler>;
+	"email:status"?: ResolvedHook<EmailStatusHandler>;
 	"comment:beforeCreate"?: ResolvedHook<CommentBeforeCreateHandler>;
 	"comment:moderate"?: ResolvedHook<CommentModerateHandler>;
 	"comment:afterCreate"?: ResolvedHook<CommentAfterCreateHandler>;
