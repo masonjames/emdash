@@ -14,6 +14,10 @@ import { contentListQuery, contentCreateBody } from "#api/schemas.js";
 
 export const prerender = false;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export const GET: APIRoute = async ({ params, url, locals }) => {
 	const { emdash, user } = locals;
 	const denied = requirePerm(user, "content:read");
@@ -53,14 +57,8 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 				mapErrorStatus(source.error?.code),
 			);
 		}
-		const sourceData =
-			source.data && typeof source.data === "object"
-				? (source.data as Record<string, unknown>)
-				: undefined;
-		const sourceItem =
-			sourceData?.item && typeof sourceData.item === "object"
-				? (sourceData.item as Record<string, unknown>)
-				: sourceData;
+		const sourceData = isRecord(source.data) ? source.data : undefined;
+		const sourceItem = isRecord(sourceData?.item) ? sourceData.item : sourceData;
 		const sourceAuthor = typeof sourceItem?.authorId === "string" ? sourceItem.authorId : "";
 		const translationDenied = requireOwnerPerm(
 			user,

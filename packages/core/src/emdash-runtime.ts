@@ -61,6 +61,12 @@ const VALID_LINK_REL = new Set([
 	"site.standard.document",
 ]);
 
+function parseStringArray(value: string): string[] {
+	const parsed: unknown = JSON.parse(value);
+	if (!Array.isArray(parsed)) return [];
+	return parsed.filter((item): item is string => typeof item === "string");
+}
+
 /**
  * Runtime validation for sandboxed plugin metadata contributions.
  * Sandboxed plugins return `unknown` across the RPC boundary — we must
@@ -1330,7 +1336,7 @@ export class EmDashRuntime {
 				label: row.label,
 				labelSingular: row.label_singular ?? undefined,
 				hierarchical: row.hierarchical === 1,
-				collections: row.collections ? (JSON.parse(row.collections) as string[]).toSorted() : [],
+				collections: row.collections ? parseStringArray(row.collections).toSorted() : [],
 			}));
 		} catch (error) {
 			console.debug("EmDash: Could not load taxonomy definitions:", error);

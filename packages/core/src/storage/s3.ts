@@ -131,7 +131,8 @@ export class S3Storage implements Storage {
 		this.publicUrl = config.publicUrl;
 		this.endpoint = config.endpoint;
 
-		this.client = new S3Client({
+		// eslint-disable-next-line typescript-eslint(no-unsafe-type-assertion) -- S3ClientConfig requires credentials in types, but the SDK supports environment/default provider resolution.
+		const clientConfig = {
 			endpoint: config.endpoint,
 			region: config.region || "auto",
 			...(config.accessKeyId && config.secretAccessKey
@@ -144,7 +145,9 @@ export class S3Storage implements Storage {
 				: {}),
 			// Required for R2 and some S3-compatible services
 			forcePathStyle: true,
-		} as ConstructorParameters<typeof S3Client>[0]);
+		} as ConstructorParameters<typeof S3Client>[0];
+
+		this.client = new S3Client(clientConfig);
 	}
 
 	async upload(options: {
