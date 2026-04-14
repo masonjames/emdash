@@ -9,7 +9,7 @@ import type { APIRoute } from "astro";
 export const prerender = false;
 
 import { createKyselyAdapter } from "@emdash-cms/auth/adapters/kysely";
-import { authenticateWithPasskey } from "@emdash-cms/auth/passkey";
+import { authenticateWithPasskey, PasskeyAuthenticationError } from "@emdash-cms/auth/passkey";
 
 import { apiError, apiSuccess, handleError } from "#api/error.js";
 import { isParseError, parseBody } from "#api/parse.js";
@@ -18,26 +18,6 @@ import { passkeyVerifyBody } from "#api/schemas.js";
 import { createChallengeStore } from "#auth/challenge-store.js";
 import { getPasskeyConfig } from "#auth/passkey-config.js";
 import { OptionsRepository } from "#db/repositories/options.js";
-
-const EXPECTED_AUTH_FAILURE_MESSAGES = [
-	"Credential not found",
-	"Challenge not found or expired",
-	"Invalid challenge type",
-	"Challenge expired",
-	"Invalid client data type",
-	"Invalid origin:",
-	"Invalid RP ID hash",
-	"User presence not verified",
-	"Invalid signature counter",
-	"Invalid signature",
-];
-
-function isExpectedPasskeyAuthFailure(error: unknown): boolean {
-	return (
-		error instanceof Error &&
-		EXPECTED_AUTH_FAILURE_MESSAGES.some((message) => error.message.startsWith(message))
-	);
-}
 
 export const POST: APIRoute = async ({ request, locals, session }) => {
 	const { emdash } = locals;
@@ -61,15 +41,12 @@ export const POST: APIRoute = async ({ request, locals, session }) => {
 		const adapter = createKyselyAdapter(emdash.db);
 		const challengeStore = createChallengeStore(emdash.db);
 
-		let user;
-		try {
-			user = await authenticateWithPasskey(passkeyConfig, adapter, body.credential, challengeStore);
-		} catch (error) {
-			if (isExpectedPasskeyAuthFailure(error)) {
-				return apiError("UNAUTHORIZED", "Authentication failed", 401);
-			}
-			throw error;
-		}
+		const user = await authenticateWithPasskey(
+			passkeyConfig,
+			adapter,
+			body.credential,
+			challengeStore,
+		);
 
 		// Create session
 		if (session) {
@@ -86,6 +63,10 @@ export const POST: APIRoute = async ({ request, locals, session }) => {
 			},
 		});
 	} catch (error) {
+		if (error instanceof PasskeyAuthenticationError) {
+			return apiError("UNAUTHORIZED", "Authentication failed", 401);
+		}
+
 		return handleError(error, "Authentication failed", "PASSKEY_VERIFY_ERROR");
 	}
 };

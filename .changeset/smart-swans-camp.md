@@ -1,4 +1,5 @@
 ---
+"@emdash-cms/auth": patch
 "emdash": patch
 ---
 
