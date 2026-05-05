@@ -56,7 +56,7 @@ export function findMatchingUrl(
 /**
  * Portable Text block type (simplified for URL rewriting)
  */
-interface PortableTextBlock {
+export interface PortableTextBlock {
 	_type: string;
 	_key?: string;
 	asset?: {

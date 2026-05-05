@@ -28,6 +28,7 @@ import {
 	rewritePortableTextUrls,
 	rewriteStringUrls,
 } from "./rewrite-url-helpers.js";
+import type { PortableTextBlock } from "./rewrite-url-helpers.js";
 
 export interface RewriteUrlsResult {
 	/** Total items updated */

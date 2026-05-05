@@ -53,6 +53,17 @@ describe("WordPress import URL rewriting", () => {
 		});
 	});
 
+	it("matches unquoted image URLs followed by a closing tag delimiter", () => {
+		const baseMap = buildBaseUrlMap(urlMap);
+		const result = rewriteStringUrls(`<img src=${oldVariantUrl}>`, urlMap, baseMap);
+
+		expect(result).toEqual({
+			newValue: `<img src=${newUrl}>`,
+			changed: true,
+			urlsRewritten: 1,
+		});
+	});
+
 	it("keeps exact matching for original attachment URLs", () => {
 		const baseMap = buildBaseUrlMap(urlMap);
 
