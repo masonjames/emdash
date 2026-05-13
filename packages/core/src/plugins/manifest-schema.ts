@@ -319,59 +319,65 @@ const pluginAdminConfigSchema = z.object({
 // ── Main schema ─────────────────────────────────────────────────
 
 /**
+ * Refinement-free manifest object schema.
+ *
+ * Use this for projections such as `.pick()` where Zod cannot operate on
+ * refined schemas. Full manifest parsing should use `pluginManifestSchema`.
+ */
+export const pluginManifestBaseSchema = z.object({
+	id: z.string().min(1),
+	version: z.string().min(1),
+	capabilities: z.array(z.enum(PLUGIN_CAPABILITIES)),
+	allowedHosts: z.array(z.string()),
+	storage: z.record(z.string(), storageCollectionSchema),
+	/**
+	 * Hook declarations — accepts both plain name strings (legacy) and
+	 * structured objects with exclusive/priority/timeout metadata.
+	 * Plain strings are normalized to `{ name }` objects after parsing.
+	 */
+	hooks: z.array(z.union([z.enum(HOOK_NAMES), manifestHookEntrySchema])),
+	/**
+	 * Route declarations — accepts both plain name strings and
+	 * structured objects with public metadata.
+	 * Plain strings are normalized to `{ name }` objects after parsing.
+	 */
+	routes: z.array(
+		z.union([
+			z.string().min(1).regex(routeNamePattern, "Route name must be a safe path segment"),
+			manifestRouteEntrySchema,
+		]),
+	),
+	mcpTools: z.array(manifestMcpToolEntrySchema).optional().default([]),
+	admin: pluginAdminConfigSchema,
+});
+
+/**
  * Zod schema matching the PluginManifest interface from types.ts.
  *
  * Every JSON.parse of a manifest.json should validate through this.
  */
-export const pluginManifestSchema = z
-	.object({
-		id: z.string().min(1),
-		version: z.string().min(1),
-		capabilities: z.array(z.enum(PLUGIN_CAPABILITIES)),
-		allowedHosts: z.array(z.string()),
-		storage: z.record(z.string(), storageCollectionSchema),
-		/**
-		 * Hook declarations — accepts both plain name strings (legacy) and
-		 * structured objects with exclusive/priority/timeout metadata.
-		 * Plain strings are normalized to `{ name }` objects after parsing.
-		 */
-		hooks: z.array(z.union([z.enum(HOOK_NAMES), manifestHookEntrySchema])),
-		/**
-		 * Route declarations — accepts both plain name strings and
-		 * structured objects with public metadata.
-		 * Plain strings are normalized to `{ name }` objects after parsing.
-		 */
-		routes: z.array(
-			z.union([
-				z.string().min(1).regex(routeNamePattern, "Route name must be a safe path segment"),
-				manifestRouteEntrySchema,
-			]),
-		),
-		mcpTools: z.array(manifestMcpToolEntrySchema).optional().default([]),
-		admin: pluginAdminConfigSchema,
-	})
-	.superRefine((manifest, ctx) => {
-		if (manifest.mcpTools.length === 0) return;
+export const pluginManifestSchema = pluginManifestBaseSchema.superRefine((manifest, ctx) => {
+	if (manifest.mcpTools.length === 0) return;
 
-		if (!manifest.capabilities.includes("mcp:tools")) {
+	if (!manifest.capabilities.includes("mcp:tools")) {
+		ctx.addIssue({
+			code: z.ZodIssueCode.custom,
+			path: ["capabilities"],
+			message: 'Manifest with MCP tools must include the "mcp:tools" capability',
+		});
+	}
+
+	const routeNames = new Set(manifest.routes.map((route) => normalizeManifestRoute(route).name));
+	for (const [index, tool] of manifest.mcpTools.entries()) {
+		if (!routeNames.has(tool.route)) {
 			ctx.addIssue({
 				code: z.ZodIssueCode.custom,
-				path: ["capabilities"],
-				message: 'Manifest with MCP tools must include the "mcp:tools" capability',
+				path: ["mcpTools", index, "route"],
+				message: "MCP tool route must be declared in routes",
 			});
 		}
-
-		const routeNames = new Set(manifest.routes.map((route) => normalizeManifestRoute(route).name));
-		for (const [index, tool] of manifest.mcpTools.entries()) {
-			if (!routeNames.has(tool.route)) {
-				ctx.addIssue({
-					code: z.ZodIssueCode.custom,
-					path: ["mcpTools", index, "route"],
-					message: "MCP tool route must be declared in routes",
-				});
-			}
-		}
-	});
+	}
+});
 
 export type ValidatedPluginManifest = z.infer<typeof pluginManifestSchema>;
 

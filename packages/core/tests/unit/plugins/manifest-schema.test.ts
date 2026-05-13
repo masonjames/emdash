@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+	pluginManifestBaseSchema,
 	pluginManifestSchema,
 	normalizeManifestRoute,
 } from "../../../src/plugins/manifest-schema.js";
@@ -20,6 +21,24 @@ function makeManifest(storage: Record<string, { indexes: Array<string | string[]
 }
 
 describe("pluginManifestSchema — route entries", () => {
+	it("should keep a refinement-free base schema for manifest projections", () => {
+		const summarySchema = pluginManifestBaseSchema.pick({
+			id: true,
+			version: true,
+			capabilities: true,
+			allowedHosts: true,
+		});
+
+		expect(
+			summarySchema.safeParse({
+				id: "test-plugin",
+				version: "1.0.0",
+				capabilities: [],
+				allowedHosts: [],
+			}).success,
+		).toBe(true);
+	});
+
 	it("should accept plain string routes", () => {
 		const result = pluginManifestSchema.safeParse(makeManifest({}));
 		// Baseline with empty routes is valid
