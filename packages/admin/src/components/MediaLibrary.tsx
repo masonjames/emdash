@@ -24,6 +24,10 @@ export interface MediaLibraryProps {
 	onSelect?: (item: MediaItem) => void;
 	onDelete?: (id: string) => void;
 	onItemUpdated?: () => void;
+	/** True when more local-library items can be fetched via cursor pagination */
+	hasMore?: boolean;
+	/** Triggered to fetch the next page of local-library items */
+	onLoadMore?: () => void;
 }
 
 /**
@@ -35,6 +39,8 @@ export function MediaLibrary({
 	onUpload,
 	onDelete,
 	onItemUpdated,
+	hasMore,
+	onLoadMore,
 }: MediaLibraryProps) {
 	const { t } = useLingui();
 	const [viewMode, setViewMode] = React.useState<"grid" | "list">("grid");
@@ -342,7 +348,13 @@ export function MediaLibrary({
 			)}
 
 			{/* Content */}
-			{currentLoading ? (
+			{/*
+			 * Gate the full-area loader on items being empty so that "Load More"
+			 * (which sets isLoading=true while fetching the next page) does not
+			 * blank out the already-rendered grid. Mirrors the ContentList
+			 * pattern from #135.
+			 */}
+			{currentLoading && currentItems.length === 0 && currentProviderItems.length === 0 ? (
 				<div className="flex items-center justify-center py-12">
 					<Loader />
 				</div>
@@ -456,6 +468,15 @@ export function MediaLibrary({
 									))}
 						</tbody>
 					</table>
+				</div>
+			)}
+
+			{/* Load more (local library only — providers handle pagination internally) */}
+			{activeProvider === "local" && hasMore && onLoadMore && (
+				<div className="flex justify-center">
+					<Button variant="outline" onClick={onLoadMore} disabled={isLoading}>
+						{isLoading ? t`Loading...` : t`Load More`}
+					</Button>
 				</div>
 			)}
 

@@ -30,8 +30,8 @@ msgstr "（デフォルト）"
 msgid " (opens in new window)"
 msgstr "（新しいウィンドウで開く）"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:716
-#: packages/admin/src/components/MediaPickerModal.tsx:798
+#: packages/admin/src/components/MediaPickerModal.tsx:782
+#: packages/admin/src/components/MediaPickerModal.tsx:864
 msgid " (selected)"
 msgstr "（選択済み）"
 
@@ -46,7 +46,7 @@ msgid ": use"
 msgstr ": 使用"
 
 #. placeholder {0}: providers?.find((p) => p.id === selectedItem.providerId)?.name
-#: packages/admin/src/components/MediaPickerModal.tsx:656
+#: packages/admin/src/components/MediaPickerModal.tsx:722
 msgid "(from {0})"
 msgstr "（{0}より）"
 
@@ -72,7 +72,7 @@ msgid "{0, plural, one {# collection} other {# collections}}"
 msgstr "{0, plural, one {#個のコレクション} other {#個のコレクション}}"
 
 #. placeholder {0}: result.affected
-#: packages/admin/src/router.tsx:1118
+#: packages/admin/src/router.tsx:1131
 msgid "{0, plural, one {# comment updated} other {# comments updated}}"
 msgstr ""
 
@@ -98,7 +98,7 @@ msgstr "{0, plural, one {\"{searchQuery}\"に一致する#件} other {\"{searchQ
 
 #. placeholder {0}: items.length
 #. placeholder {0}: menu.itemCount ?? 0
-#: packages/admin/src/components/MediaPickerModal.tsx:527
+#: packages/admin/src/components/MediaPickerModal.tsx:573
 #: packages/admin/src/components/MenuList.tsx:217
 msgid "{0, plural, one {# item} other {# items}}"
 msgstr "{0, plural, one {#件} other {#件}}"
@@ -243,8 +243,8 @@ msgstr "{0}がv{1}に更新されました"
 
 #. placeholder {0}: item.filename
 #. placeholder {1}: selected ? t` (selected)` : ""
-#: packages/admin/src/components/MediaPickerModal.tsx:716
-#: packages/admin/src/components/MediaPickerModal.tsx:798
+#: packages/admin/src/components/MediaPickerModal.tsx:782
+#: packages/admin/src/components/MediaPickerModal.tsx:864
 msgid "{0}{1}"
 msgstr "{0}{1}"
 
@@ -310,13 +310,13 @@ msgstr "{pluginName}に以下の権限が必要です:"
 msgid "{total, plural, one {# total} other {# total}}"
 msgstr "{total, plural, one {合計#件} other {合計#件}}"
 
-#: packages/admin/src/components/MediaLibrary.tsx:140
-#: packages/admin/src/components/MediaLibrary.tsx:176
+#: packages/admin/src/components/MediaLibrary.tsx:146
+#: packages/admin/src/components/MediaLibrary.tsx:182
 msgid "{total, plural, one {File uploaded} other {# files uploaded}}"
 msgstr "{total, plural, one {ファイルをアップロードしました} other {#件のファイルをアップロードしました}}"
 
-#: packages/admin/src/components/MediaLibrary.tsx:145
-#: packages/admin/src/components/MediaLibrary.tsx:181
+#: packages/admin/src/components/MediaLibrary.tsx:151
+#: packages/admin/src/components/MediaLibrary.tsx:187
 msgid "{total, plural, one {Upload failed} other {All # uploads failed}}"
 msgstr "{total, plural, one {アップロード失敗} other {#件すべてのアップロードに失敗}}"
 
@@ -336,8 +336,8 @@ msgstr "{unchangedCount, plural, one {変更なし#件を非表示} other {変�
 msgid "{unchangedCount, plural, one {Show # unchanged} other {Show # unchanged}}"
 msgstr "{unchangedCount, plural, one {変更なし#件を表示} other {変更なし#件を表示}}"
 
-#: packages/admin/src/components/MediaLibrary.tsx:150
-#: packages/admin/src/components/MediaLibrary.tsx:186
+#: packages/admin/src/components/MediaLibrary.tsx:156
+#: packages/admin/src/components/MediaLibrary.tsx:192
 msgid "{uploaded} uploaded, {failed} failed"
 msgstr "{uploaded}件アップロード、{failed}件失敗"
 
@@ -468,7 +468,7 @@ msgstr "承認して更新"
 msgid "Accept Invite"
 msgstr ""
 
-#: packages/admin/src/router.tsx:1138
+#: packages/admin/src/router.tsx:1151
 msgid "Access Denied"
 msgstr ""
 
@@ -497,7 +497,7 @@ msgstr "アカウント情報"
 #: packages/admin/src/components/ContentList.tsx:235
 #: packages/admin/src/components/ContentList.tsx:349
 #: packages/admin/src/components/ContentTypeList.tsx:106
-#: packages/admin/src/components/MediaLibrary.tsx:419
+#: packages/admin/src/components/MediaLibrary.tsx:431
 #: packages/admin/src/components/TaxonomyManager.tsx:821
 msgid "Actions"
 msgstr "操作"
@@ -537,11 +537,11 @@ msgstr "許可ドメインを追加"
 msgid "Add at least one sub-field to define the repeater structure."
 msgstr "リピーター構造を定義するために、少なくとも1つのサブフィールドを追加してください。"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2510
+#: packages/admin/src/components/PortableTextEditor.tsx:2537
 msgid "Add column after"
 msgstr "後に列を追加"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2503
+#: packages/admin/src/components/PortableTextEditor.tsx:2530
 msgid "Add column before"
 msgstr "前に列を追加"
 
@@ -591,7 +591,7 @@ msgstr ""
 msgid "Add Item"
 msgstr "アイテムを追加"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2470
+#: packages/admin/src/components/PortableTextEditor.tsx:2497
 msgid "Add link"
 msgstr ""
 
@@ -624,11 +624,11 @@ msgstr "パスキーを追加"
 msgid "Add plugins to your astro.config.mjs to extend EmDash functionality."
 msgstr "astro.config.mjsにプラグインを追加してEmDashの機能を拡張できます。"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2533
+#: packages/admin/src/components/PortableTextEditor.tsx:2560
 msgid "Add row after"
 msgstr "後に行を追加"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2526
+#: packages/admin/src/components/PortableTextEditor.tsx:2553
 msgid "Add row before"
 msgstr "前に行を追加"
 
@@ -679,15 +679,15 @@ msgstr "管理者"
 msgid "After send:"
 msgstr "送信後:"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2858
+#: packages/admin/src/components/PortableTextEditor.tsx:2885
 msgid "Align Center"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2851
+#: packages/admin/src/components/PortableTextEditor.tsx:2878
 msgid "Align Left"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2865
+#: packages/admin/src/components/PortableTextEditor.tsx:2892
 msgid "Align Right"
 msgstr ""
 
@@ -770,8 +770,8 @@ msgstr ""
 msgid "Alt Text"
 msgstr "代替テキスト"
 
-#: packages/admin/src/components/MediaLibrary.tsx:612
-#: packages/admin/src/components/MediaLibrary.tsx:669
+#: packages/admin/src/components/MediaLibrary.tsx:633
+#: packages/admin/src/components/MediaLibrary.tsx:690
 msgid "Alt text set"
 msgstr "代替テキスト設定済み"
 
@@ -797,10 +797,10 @@ msgstr "または、WordPressからエクスポート（ツール → エクス�
 #: packages/admin/src/router.tsx:820
 #: packages/admin/src/router.tsx:850
 #: packages/admin/src/router.tsx:870
-#: packages/admin/src/router.tsx:1083
-#: packages/admin/src/router.tsx:1099
-#: packages/admin/src/router.tsx:1124
-#: packages/admin/src/router.tsx:1541
+#: packages/admin/src/router.tsx:1096
+#: packages/admin/src/router.tsx:1112
+#: packages/admin/src/router.tsx:1137
+#: packages/admin/src/router.tsx:1554
 msgid "An error occurred"
 msgstr "エラーが発生しました"
 
@@ -833,12 +833,12 @@ msgstr ""
 msgid "Application Password"
 msgstr "アプリケーションパスワード"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2925
+#: packages/admin/src/components/PortableTextEditor.tsx:2952
 msgid "Apply"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2410
-#: packages/admin/src/components/PortableTextEditor.tsx:2411
+#: packages/admin/src/components/PortableTextEditor.tsx:2437
+#: packages/admin/src/components/PortableTextEditor.tsx:2438
 msgid "Apply link"
 msgstr ""
 
@@ -972,7 +972,7 @@ msgstr ""
 msgid "Autosave status"
 msgstr ""
 
-#: packages/admin/src/components/MediaPickerModal.tsx:595
+#: packages/admin/src/components/MediaPickerModal.tsx:647
 msgid "Available media"
 msgstr "利用可能なメディア"
 
@@ -1030,7 +1030,7 @@ msgstr "テーマに戻る"
 msgid "Before send:"
 msgstr "送信前:"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:144
+#: packages/admin/src/components/settings/SeoSettings.tsx:233
 msgid "Bing Verification"
 msgstr "Bing認証"
 
@@ -1042,8 +1042,8 @@ msgstr ""
 msgid "Block actions - drag to reorder, click for menu"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2434
-#: packages/admin/src/components/PortableTextEditor.tsx:2740
+#: packages/admin/src/components/PortableTextEditor.tsx:2461
+#: packages/admin/src/components/PortableTextEditor.tsx:2767
 msgid "Bold"
 msgstr ""
 
@@ -1075,7 +1075,7 @@ msgstr "テーマを参照して、自分のコンテンツでプレビューで
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:101
 #: packages/admin/src/components/PortableTextEditor.tsx:886
-#: packages/admin/src/components/PortableTextEditor.tsx:2808
+#: packages/admin/src/components/PortableTextEditor.tsx:2835
 msgid "Bullet List"
 msgstr "箇条書きリスト"
 
@@ -1116,12 +1116,12 @@ msgstr "コンテンツを閲覧可能"
 #: packages/admin/src/components/editor/PluginBlockNode.tsx:406
 #: packages/admin/src/components/FieldEditor.tsx:648
 #: packages/admin/src/components/MediaDetailPanel.tsx:234
-#: packages/admin/src/components/MediaPickerModal.tsx:663
+#: packages/admin/src/components/MediaPickerModal.tsx:729
 #: packages/admin/src/components/MenuEditor.tsx:351
 #: packages/admin/src/components/MenuEditor.tsx:522
 #: packages/admin/src/components/MenuList.tsx:172
 #: packages/admin/src/components/PluginManager.tsx:581
-#: packages/admin/src/components/PortableTextEditor.tsx:2909
+#: packages/admin/src/components/PortableTextEditor.tsx:2936
 #: packages/admin/src/components/Redirects.tsx:175
 #: packages/admin/src/components/SectionPickerModal.tsx:130
 #: packages/admin/src/components/Sections.tsx:209
@@ -1151,7 +1151,7 @@ msgstr "名前変更をキャンセル"
 msgid "Cannot delete theme sections"
 msgstr "テーマセクションは削除できません"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:356
+#: packages/admin/src/components/MediaPickerModal.tsx:400
 msgid "Cannot determine MIME type from URL. Use a URL ending in a recognized image extension (e.g. .jpg, .png, .webp)."
 msgstr ""
 
@@ -1201,11 +1201,15 @@ msgstr "変更"
 msgid "Change <0>{0}</0> from <1>{1}</1> to <2>{2}</2>? They will lose access to higher-level features."
 msgstr ""
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:237
+#: packages/admin/src/components/settings/GeneralSettings.tsx:262
 msgid "Change Favicon"
 msgstr "ファビコンを変更"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:193
+#: packages/admin/src/components/settings/SeoSettings.tsx:200
+msgid "Change Image"
+msgstr ""
+
+#: packages/admin/src/components/settings/GeneralSettings.tsx:208
 msgid "Change Logo"
 msgstr "ロゴを変更"
 
@@ -1213,7 +1217,7 @@ msgstr "ロゴを変更"
 msgid "Changes discarded"
 msgstr ""
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:135
+#: packages/admin/src/components/settings/SeoSettings.tsx:162
 msgid "Character between page title and site name (e.g., \"My Post | My Site\")"
 msgstr "ページタイトルとサイト名の間の文字（例: \"記事タイトル | サイト名\"）"
 
@@ -1273,9 +1277,9 @@ msgstr "メール内のリンクをクリックしてサインインしてくだ
 #: packages/admin/src/components/MarketplacePluginDetail.tsx:437
 #: packages/admin/src/components/MediaDetailPanel.tsx:131
 #: packages/admin/src/components/MediaDetailPanel.tsx:133
-#: packages/admin/src/components/MediaPickerModal.tsx:423
-#: packages/admin/src/components/MediaPickerModal.tsx:429
-#: packages/admin/src/components/MediaPickerModal.tsx:433
+#: packages/admin/src/components/MediaPickerModal.tsx:469
+#: packages/admin/src/components/MediaPickerModal.tsx:475
+#: packages/admin/src/components/MediaPickerModal.tsx:479
 #: packages/admin/src/components/MenuEditor.tsx:313
 #: packages/admin/src/components/MenuEditor.tsx:319
 #: packages/admin/src/components/MenuEditor.tsx:323
@@ -1326,14 +1330,14 @@ msgid "Close panel"
 msgstr "パネルを閉じる"
 
 #: packages/admin/src/components/ContentTypeList.tsx:244
-#: packages/admin/src/components/PortableTextEditor.tsx:2462
+#: packages/admin/src/components/PortableTextEditor.tsx:2489
 #: packages/admin/src/components/Redirects.tsx:443
 msgid "Code"
 msgstr "コード"
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:93
 #: packages/admin/src/components/PortableTextEditor.tsx:916
-#: packages/admin/src/components/PortableTextEditor.tsx:2829
+#: packages/admin/src/components/PortableTextEditor.tsx:2856
 msgid "Code Block"
 msgstr "コードブロック"
 
@@ -1430,7 +1434,7 @@ msgstr "{0}に接続済み"
 #: packages/admin/src/components/comments/CommentDetail.tsx:103
 #: packages/admin/src/components/comments/CommentInbox.tsx:293
 #: packages/admin/src/components/Dashboard.tsx:164
-#: packages/admin/src/components/PortableTextEditor.tsx:1952
+#: packages/admin/src/components/PortableTextEditor.tsx:1979
 #: packages/admin/src/components/SectionEditor.tsx:194
 #: packages/admin/src/components/Sidebar.tsx:412
 #: packages/admin/src/components/Widgets.tsx:819
@@ -1557,7 +1561,7 @@ msgstr ""
 msgid "Could not copy automatically. Please select the URL above and copy manually."
 msgstr "自動コピーできませんでした。上のURLを選択して手動でコピーしてください。"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:382
+#: packages/admin/src/components/MediaPickerModal.tsx:426
 msgid "Could not load image from URL"
 msgstr "URLから画像を読み込めませんでした"
 
@@ -1778,7 +1782,7 @@ msgstr "カスタム"
 msgid "Custom Fields"
 msgstr ""
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:154
+#: packages/admin/src/components/settings/SeoSettings.tsx:243
 msgid "Custom robots.txt content. Leave empty to use the default."
 msgstr "カスタムrobots.txtの内容。デフォルトを使用する場合は空のままにしてください。"
 
@@ -1816,7 +1820,7 @@ msgstr "日時"
 msgid "Date and time picker"
 msgstr "日時ピッカー"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:279
+#: packages/admin/src/components/settings/GeneralSettings.tsx:304
 msgid "Date Format"
 msgstr "日付形式"
 
@@ -1832,6 +1836,14 @@ msgstr "デフォルトロール"
 #: packages/admin/src/components/settings/AllowedDomainsSettings.tsx:266
 msgid "Default role:"
 msgstr "デフォルトロール:"
+
+#: packages/admin/src/components/settings/SeoSettings.tsx:180
+msgid "Default social image"
+msgstr ""
+
+#: packages/admin/src/components/settings/SeoSettings.tsx:171
+msgid "Default Social Image"
+msgstr ""
 
 #: packages/admin/src/components/TaxonomyManager.tsx:599
 msgid "Define a new taxonomy for classifying content"
@@ -1905,7 +1917,7 @@ msgstr "{0}を削除しますか？"
 msgid "Delete Byline?"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2517
+#: packages/admin/src/components/PortableTextEditor.tsx:2544
 msgid "Delete column"
 msgstr "列を削除"
 
@@ -1964,7 +1976,7 @@ msgstr "リダイレクト{0}を削除"
 msgid "Delete Redirect?"
 msgstr "リダイレクトを削除しますか？"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2538
+#: packages/admin/src/components/PortableTextEditor.tsx:2565
 msgid "Delete row"
 msgstr "行を削除"
 
@@ -1972,7 +1984,7 @@ msgstr "行を削除"
 msgid "Delete Section?"
 msgstr "セクションを削除しますか？"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2553
+#: packages/admin/src/components/PortableTextEditor.tsx:2580
 msgid "Delete table"
 msgstr "テーブルを削除"
 
@@ -2331,7 +2343,7 @@ msgstr "ドメインを編集"
 msgid "Edit Field"
 msgstr "フィールドを編集"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2470
+#: packages/admin/src/components/PortableTextEditor.tsx:2497
 msgid "Edit link"
 msgstr ""
 
@@ -2414,11 +2426,11 @@ msgid "Email verified!"
 msgstr "メールが認証されました！"
 
 #. placeholder {0}: block.label
-#: packages/admin/src/components/PortableTextEditor.tsx:1965
+#: packages/admin/src/components/PortableTextEditor.tsx:1992
 msgid "Embed a {0}"
 msgstr "{0}を埋め込む"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:1968
+#: packages/admin/src/components/PortableTextEditor.tsx:1995
 msgid "Embeds"
 msgstr "埋め込み"
 
@@ -2515,7 +2527,7 @@ msgstr "WordPressサイトのURLを入力"
 #: packages/admin/src/components/MenuEditor.tsx:179
 #: packages/admin/src/components/SetupWizard.tsx:539
 #: packages/admin/src/components/Widgets.tsx:689
-#: packages/admin/src/router.tsx:1722
+#: packages/admin/src/router.tsx:1735
 msgid "Error"
 msgstr "エラー"
 
@@ -2543,7 +2555,7 @@ msgstr "既存"
 msgid "Exit distraction-free mode"
 msgstr "集中モードを終了"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2971
+#: packages/admin/src/components/PortableTextEditor.tsx:2998
 msgid "Exit Spotlight Mode"
 msgstr ""
 
@@ -2639,7 +2651,7 @@ msgid "Failed to delete collection"
 msgstr ""
 
 #: packages/admin/src/lib/api/comments.ts:111
-#: packages/admin/src/router.tsx:1098
+#: packages/admin/src/router.tsx:1111
 msgid "Failed to delete comment"
 msgstr ""
 
@@ -2757,7 +2769,7 @@ msgstr ""
 #: packages/admin/src/lib/api/users.ts:88
 #: packages/admin/src/lib/api/users.ts:93
 #: packages/admin/src/router.tsx:642
-#: packages/admin/src/router.tsx:1029
+#: packages/admin/src/router.tsx:1042
 msgid "Failed to fetch user"
 msgstr ""
 
@@ -2807,7 +2819,7 @@ msgstr ""
 msgid "Failed to load email settings"
 msgstr "メール設定の読み込みに失敗しました"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:365
+#: packages/admin/src/components/MediaPickerModal.tsx:409
 msgid "Failed to load image"
 msgstr ""
 
@@ -2845,7 +2857,7 @@ msgstr ""
 msgid "Failed to load widget"
 msgstr ""
 
-#: packages/admin/src/router.tsx:1123
+#: packages/admin/src/router.tsx:1136
 msgid "Failed to perform bulk action"
 msgstr ""
 
@@ -2904,12 +2916,12 @@ msgid "Failed to rewrite URLs"
 msgstr ""
 
 #: packages/admin/src/router.tsx:701
-#: packages/admin/src/router.tsx:1540
+#: packages/admin/src/router.tsx:1553
 msgid "Failed to save"
 msgstr "保存に失敗しました"
 
 #: packages/admin/src/components/settings/GeneralSettings.tsx:58
-#: packages/admin/src/components/settings/SeoSettings.tsx:53
+#: packages/admin/src/components/settings/SeoSettings.tsx:62
 #: packages/admin/src/components/settings/SocialSettings.tsx:53
 msgid "Failed to save settings"
 msgstr "設定の保存に失敗しました"
@@ -2968,7 +2980,7 @@ msgstr "ドメインの更新に失敗しました"
 msgid "Failed to update plugin"
 msgstr ""
 
-#: packages/admin/src/router.tsx:1082
+#: packages/admin/src/router.tsx:1095
 msgid "Failed to update status"
 msgstr ""
 
@@ -2984,8 +2996,8 @@ msgstr ""
 msgid "Failed to verify registration"
 msgstr ""
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:221
-#: packages/admin/src/components/settings/GeneralSettings.tsx:226
+#: packages/admin/src/components/settings/GeneralSettings.tsx:236
+#: packages/admin/src/components/settings/GeneralSettings.tsx:242
 msgid "Favicon"
 msgstr "ファビコン"
 
@@ -3035,7 +3047,7 @@ msgid "File from media library"
 msgstr "メディアライブラリからファイル"
 
 #: packages/admin/src/components/MediaDetailPanel.tsx:192
-#: packages/admin/src/components/MediaLibrary.tsx:416
+#: packages/admin/src/components/MediaLibrary.tsx:428
 msgid "Filename"
 msgstr "ファイル名"
 
@@ -3125,15 +3137,15 @@ msgid "Give this passkey a name to help you identify it later."
 msgstr "後で識別しやすいように、このパスキーに名前を付けてください。"
 
 #: packages/admin/src/components/WordPressImport.tsx:2224
-#: packages/admin/src/router.tsx:1742
+#: packages/admin/src/router.tsx:1755
 msgid "Go to Dashboard"
 msgstr "ダッシュボードへ"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:138
+#: packages/admin/src/components/settings/SeoSettings.tsx:227
 msgid "Google Verification"
 msgstr "Google認証"
 
-#: packages/admin/src/components/MediaLibrary.tsx:232
+#: packages/admin/src/components/MediaLibrary.tsx:238
 msgid "Grid view"
 msgstr "グリッド表示"
 
@@ -3151,19 +3163,19 @@ msgstr ""
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:61
 #: packages/admin/src/components/PortableTextEditor.tsx:856
-#: packages/admin/src/components/PortableTextEditor.tsx:2781
+#: packages/admin/src/components/PortableTextEditor.tsx:2808
 msgid "Heading 1"
 msgstr "見出し1"
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:69
 #: packages/admin/src/components/PortableTextEditor.tsx:866
-#: packages/admin/src/components/PortableTextEditor.tsx:2788
+#: packages/admin/src/components/PortableTextEditor.tsx:2815
 msgid "Heading 2"
 msgstr "見出し2"
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:77
 #: packages/admin/src/components/PortableTextEditor.tsx:876
-#: packages/admin/src/components/PortableTextEditor.tsx:2795
+#: packages/admin/src/components/PortableTextEditor.tsx:2822
 msgid "Heading 3"
 msgstr "見出し3"
 
@@ -3217,7 +3229,7 @@ msgstr "アプリケーションパスワードの作成方法"
 msgid "https://example.com or /about"
 msgstr "https://example.com または /about"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:449
+#: packages/admin/src/components/MediaPickerModal.tsx:495
 msgid "https://example.com/image.jpg"
 msgstr ""
 
@@ -3235,7 +3247,7 @@ msgid "If an account exists for <0>{email}</0>, we've sent a sign-in link."
 msgstr "<0>{email}</0>のアカウントが存在する場合、サインインリンクを送信しました。"
 
 #: packages/admin/src/components/FieldEditor.tsx:204
-#: packages/admin/src/components/PortableTextEditor.tsx:1934
+#: packages/admin/src/components/PortableTextEditor.tsx:1961
 msgid "Image"
 msgstr "画像"
 
@@ -3257,7 +3269,7 @@ msgstr "画像設定"
 msgid "Image shown when this page is shared on social media"
 msgstr "ソーシャルメディアでこのページを共有する際に表示される画像"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:450
+#: packages/admin/src/components/MediaPickerModal.tsx:496
 msgid "Image URL"
 msgstr "画像URL"
 
@@ -3352,12 +3364,12 @@ msgstr "サンプルコンテンツを含める（新しいサイトに推奨）
 msgid "Incompatible"
 msgstr "非互換"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2768
+#: packages/admin/src/components/PortableTextEditor.tsx:2795
 msgid "Inline Code"
 msgstr ""
 
-#: packages/admin/src/components/MediaPickerModal.tsx:461
-#: packages/admin/src/components/MediaPickerModal.tsx:666
+#: packages/admin/src/components/MediaPickerModal.tsx:507
+#: packages/admin/src/components/MediaPickerModal.tsx:732
 #: packages/admin/src/components/PortableTextEditor.tsx:1243
 msgid "Insert"
 msgstr "挿入"
@@ -3374,7 +3386,7 @@ msgstr "コードブロックを挿入"
 msgid "Insert a horizontal rule"
 msgstr "水平線を挿入"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:1949
+#: packages/admin/src/components/PortableTextEditor.tsx:1976
 msgid "Insert a reusable section"
 msgstr "再利用可能なセクションを挿入"
 
@@ -3382,23 +3394,23 @@ msgstr "再利用可能なセクションを挿入"
 msgid "Insert a table"
 msgstr "テーブルを挿入"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:1935
+#: packages/admin/src/components/PortableTextEditor.tsx:1962
 msgid "Insert an image"
 msgstr "画像を挿入"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:443
+#: packages/admin/src/components/MediaPickerModal.tsx:489
 msgid "Insert from URL"
 msgstr "URLから挿入"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2938
+#: packages/admin/src/components/PortableTextEditor.tsx:2965
 msgid "Insert Horizontal Rule"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2933
+#: packages/admin/src/components/PortableTextEditor.tsx:2960
 msgid "Insert Image"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2880
+#: packages/admin/src/components/PortableTextEditor.tsx:2907
 msgid "Insert Link"
 msgstr ""
 
@@ -3406,7 +3418,7 @@ msgstr ""
 msgid "Insert Section"
 msgstr "セクションを挿入"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2838
+#: packages/admin/src/components/PortableTextEditor.tsx:2865
 msgid "Insert Table"
 msgstr "テーブルを挿入"
 
@@ -3482,8 +3494,8 @@ msgstr "ユーザーを招待"
 msgid "Invite your first team member"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2441
-#: packages/admin/src/components/PortableTextEditor.tsx:2747
+#: packages/admin/src/components/PortableTextEditor.tsx:2468
+#: packages/admin/src/components/PortableTextEditor.tsx:2774
 msgid "Italic"
 msgstr ""
 
@@ -3587,9 +3599,9 @@ msgstr "検出可能なパスキーを使用するには空白のままにして
 msgid "Leave unassigned"
 msgstr "未割り当てのまま"
 
-#: packages/admin/src/components/MediaLibrary.tsx:82
-#: packages/admin/src/components/MediaLibrary.tsx:202
-#: packages/admin/src/components/MediaLibrary.tsx:314
+#: packages/admin/src/components/MediaLibrary.tsx:88
+#: packages/admin/src/components/MediaLibrary.tsx:208
+#: packages/admin/src/components/MediaLibrary.tsx:320
 msgid "Library"
 msgstr "ライブラリ"
 
@@ -3634,7 +3646,7 @@ msgstr "LinkedIn"
 msgid "Links"
 msgstr "リンク"
 
-#: packages/admin/src/components/MediaLibrary.tsx:241
+#: packages/admin/src/components/MediaLibrary.tsx:247
 msgid "List view"
 msgstr "リスト表示"
 
@@ -3651,6 +3663,8 @@ msgstr "もっと読み込む"
 
 #: packages/admin/src/components/ContentList.tsx:330
 #: packages/admin/src/components/ContentList.tsx:387
+#: packages/admin/src/components/MediaLibrary.tsx:478
+#: packages/admin/src/components/MediaPickerModal.tsx:708
 #: packages/admin/src/components/users/UserList.tsx:169
 msgid "Load More"
 msgstr "もっと読み込む"
@@ -3663,7 +3677,7 @@ msgstr "コレクションを読み込み中..."
 msgid "Loading comments..."
 msgstr "コメントを読み込み中..."
 
-#: packages/admin/src/router.tsx:1711
+#: packages/admin/src/router.tsx:1724
 msgid "Loading configuration..."
 msgstr ""
 
@@ -3671,7 +3685,7 @@ msgstr ""
 msgid "Loading content..."
 msgstr "コンテンツを読み込み中..."
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2268
+#: packages/admin/src/components/PortableTextEditor.tsx:2295
 msgid "Loading editor..."
 msgstr ""
 
@@ -3697,7 +3711,7 @@ msgid "Loading sections..."
 msgstr "セクションを読み込み中..."
 
 #: packages/admin/src/components/settings/GeneralSettings.tsx:104
-#: packages/admin/src/components/settings/SeoSettings.tsx:81
+#: packages/admin/src/components/settings/SeoSettings.tsx:108
 #: packages/admin/src/components/settings/SocialSettings.tsx:81
 msgid "Loading settings..."
 msgstr "設定を読み込み中..."
@@ -3720,6 +3734,8 @@ msgstr ""
 #: packages/admin/src/components/ContentList.tsx:387
 #: packages/admin/src/components/ContentPickerModal.tsx:233
 #: packages/admin/src/components/MarketplaceBrowse.tsx:198
+#: packages/admin/src/components/MediaLibrary.tsx:478
+#: packages/admin/src/components/MediaPickerModal.tsx:708
 #: packages/admin/src/components/PortableTextEditor.tsx:1751
 #: packages/admin/src/components/settings/AllowedDomainsSettings.tsx:176
 #: packages/admin/src/components/settings/SecuritySettings.tsx:113
@@ -3749,8 +3765,8 @@ msgstr "アスペクト比を固定"
 msgid "Log out"
 msgstr "ログアウト"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:177
 #: packages/admin/src/components/settings/GeneralSettings.tsx:182
+#: packages/admin/src/components/settings/GeneralSettings.tsx:188
 msgid "Logo"
 msgstr "ロゴ"
 
@@ -3855,7 +3871,7 @@ msgstr "最大文字数"
 msgid "Max Value"
 msgstr "最大値"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:1938
+#: packages/admin/src/components/PortableTextEditor.tsx:1965
 #: packages/admin/src/components/Sidebar.tsx:185
 #: packages/admin/src/components/WordPressImport.tsx:678
 #: packages/admin/src/components/WordPressImport.tsx:1173
@@ -3884,7 +3900,7 @@ msgid "Media import was skipped"
 msgstr "メディアのインポートはスキップされました"
 
 #: packages/admin/src/components/AdminCommandPalette.tsx:154
-#: packages/admin/src/components/MediaLibrary.tsx:226
+#: packages/admin/src/components/MediaLibrary.tsx:232
 msgid "Media Library"
 msgstr "メディアライブラリ"
 
@@ -3963,11 +3979,11 @@ msgstr ""
 msgid "Meta Description"
 msgstr "メタディスクリプション"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:147
+#: packages/admin/src/components/settings/SeoSettings.tsx:236
 msgid "Meta tag content for Bing Webmaster Tools verification"
 msgstr "Bingウェブマスターツール認証用メタタグの内容"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:141
+#: packages/admin/src/components/settings/SeoSettings.tsx:230
 msgid "Meta tag content for Google Search Console verification"
 msgstr "Google Search Console認証用メタタグの内容"
 
@@ -4178,8 +4194,8 @@ msgstr "まだ{0}がありません。作成して始めましょう。"
 msgid "No 404 errors recorded yet."
 msgstr "404エラーはまだ記録されていません。"
 
-#: packages/admin/src/components/MediaLibrary.tsx:612
-#: packages/admin/src/components/MediaLibrary.tsx:669
+#: packages/admin/src/components/MediaLibrary.tsx:633
+#: packages/admin/src/components/MediaLibrary.tsx:690
 msgid "No alt text"
 msgstr "代替テキストなし"
 
@@ -4289,17 +4305,17 @@ msgstr "このアカウントに一致するパスキーが見つかりません
 msgid "No maximum"
 msgstr "上限なし"
 
-#: packages/admin/src/components/MediaLibrary.tsx:369
-#: packages/admin/src/components/MediaPickerModal.tsx:579
+#: packages/admin/src/components/MediaLibrary.tsx:381
+#: packages/admin/src/components/MediaPickerModal.tsx:631
 msgid "No media available from this provider"
 msgstr "このプロバイダーから利用可能なメディアはありません"
 
-#: packages/admin/src/components/MediaLibrary.tsx:363
-#: packages/admin/src/components/MediaPickerModal.tsx:573
+#: packages/admin/src/components/MediaLibrary.tsx:375
+#: packages/admin/src/components/MediaPickerModal.tsx:625
 msgid "No media found"
 msgstr "メディアが見つかりません"
 
-#: packages/admin/src/components/MediaLibrary.tsx:352
+#: packages/admin/src/components/MediaLibrary.tsx:364
 msgid "No media yet"
 msgstr "メディアはまだありません"
 
@@ -4412,13 +4428,13 @@ msgstr "なし（トップレベル）"
 msgid "Number"
 msgstr "数値"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:276
+#: packages/admin/src/components/settings/GeneralSettings.tsx:301
 msgid "Number of posts to show per page on list views"
 msgstr "一覧表示でページあたりに表示する投稿数"
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:109
 #: packages/admin/src/components/PortableTextEditor.tsx:896
-#: packages/admin/src/components/PortableTextEditor.tsx:2815
+#: packages/admin/src/components/PortableTextEditor.tsx:2842
 msgid "Numbered List"
 msgstr "番号付きリスト"
 
@@ -4493,7 +4509,7 @@ msgstr "ホバー時の任意のツールチップ"
 msgid "Options (one per line)"
 msgstr "選択肢（1行に1つ）"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:473
+#: packages/admin/src/components/MediaPickerModal.tsx:519
 msgid "or choose from library"
 msgstr "またはライブラリから選択"
 
@@ -4539,7 +4555,7 @@ msgstr "所有者"
 msgid "Package"
 msgstr "パッケージ"
 
-#: packages/admin/src/router.tsx:1737
+#: packages/admin/src/router.tsx:1750
 msgid "Page Not Found"
 msgstr ""
 
@@ -4690,7 +4706,7 @@ msgstr "有効なメールアドレスを入力してください"
 msgid "Please enter a valid email address"
 msgstr "有効なメールアドレスを入力してください"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:342
+#: packages/admin/src/components/MediaPickerModal.tsx:386
 msgid "Please enter a valid URL"
 msgstr "有効なURLを入力してください"
 
@@ -4757,7 +4773,7 @@ msgstr "このページが別のURLの複製の場合、検索エンジンにオ
 msgid "Posts"
 msgstr "投稿"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:270
+#: packages/admin/src/components/settings/GeneralSettings.tsx:295
 msgid "Posts Per Page"
 msgstr "ページあたりの投稿数"
 
@@ -4776,7 +4792,7 @@ msgstr "準備中..."
 
 #: packages/admin/src/components/ContentEditor.tsx:649
 #: packages/admin/src/components/ContentTypeEditor.tsx:81
-#: packages/admin/src/components/MediaLibrary.tsx:415
+#: packages/admin/src/components/MediaLibrary.tsx:427
 msgid "Preview"
 msgstr "プレビュー"
 
@@ -4849,7 +4865,7 @@ msgstr ""
 
 #: packages/admin/src/components/editor/BlockMenu.tsx:85
 #: packages/admin/src/components/PortableTextEditor.tsx:906
-#: packages/admin/src/components/PortableTextEditor.tsx:2822
+#: packages/admin/src/components/PortableTextEditor.tsx:2849
 msgid "Quote"
 msgstr "引用"
 
@@ -4879,7 +4895,7 @@ msgstr ""
 msgid "Read your content"
 msgstr ""
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:267
+#: packages/admin/src/components/settings/GeneralSettings.tsx:292
 msgid "Reading"
 msgstr "閲覧"
 
@@ -4919,13 +4935,17 @@ msgstr "ログインにリダイレクト中..."
 msgid "Redirects"
 msgstr "リダイレクト"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2958
+#: packages/admin/src/components/PortableTextEditor.tsx:2985
 msgid "Redo"
 msgstr ""
 
 #: packages/admin/src/components/FieldEditor.tsx:216
 msgid "Reference"
 msgstr "参照"
+
+#: packages/admin/src/components/settings/GeneralSettings.tsx:251
+msgid "Referenced favicon unavailable."
+msgstr ""
 
 #: packages/admin/src/components/ContentTypeList.tsx:78
 msgid "Register"
@@ -4951,11 +4971,12 @@ msgstr "登録がキャンセルされたかタイムアウトしました。も
 #: packages/admin/src/components/BlockKitMediaPickerField.tsx:76
 #: packages/admin/src/components/ContentEditor.tsx:1969
 #: packages/admin/src/components/editor/ImageDetailPanel.tsx:177
-#: packages/admin/src/components/PortableTextEditor.tsx:2921
-#: packages/admin/src/components/settings/GeneralSettings.tsx:202
-#: packages/admin/src/components/settings/GeneralSettings.tsx:246
+#: packages/admin/src/components/PortableTextEditor.tsx:2948
+#: packages/admin/src/components/settings/GeneralSettings.tsx:217
+#: packages/admin/src/components/settings/GeneralSettings.tsx:271
 #: packages/admin/src/components/settings/PasskeyItem.tsx:187
 #: packages/admin/src/components/settings/PasskeyItem.tsx:209
+#: packages/admin/src/components/settings/SeoSettings.tsx:209
 msgid "Remove"
 msgstr "削除"
 
@@ -5002,8 +5023,8 @@ msgstr "画像を削除しますか？"
 msgid "Remove item {0}"
 msgstr "アイテム{0}を削除"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2422
-#: packages/admin/src/components/PortableTextEditor.tsx:2423
+#: packages/admin/src/components/PortableTextEditor.tsx:2449
+#: packages/admin/src/components/PortableTextEditor.tsx:2450
 msgid "Remove link"
 msgstr ""
 
@@ -5132,7 +5153,7 @@ msgstr "復元中..."
 
 #: packages/admin/src/components/MarketplaceBrowse.tsx:141
 #: packages/admin/src/components/ThemeMarketplaceBrowse.tsx:122
-#: packages/admin/src/router.tsx:1725
+#: packages/admin/src/router.tsx:1738
 msgid "Retry"
 msgstr "再試行"
 
@@ -5247,13 +5268,13 @@ msgstr "公開前にコンテンツを下書きとして保存"
 msgid "Save name"
 msgstr "名前を保存"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:99
-#: packages/admin/src/components/settings/SeoSettings.tsx:162
+#: packages/admin/src/components/settings/SeoSettings.tsx:126
+#: packages/admin/src/components/settings/SeoSettings.tsx:251
 msgid "Save SEO Settings"
 msgstr "SEO設定を保存"
 
 #: packages/admin/src/components/settings/GeneralSettings.tsx:125
-#: packages/admin/src/components/settings/GeneralSettings.tsx:296
+#: packages/admin/src/components/settings/GeneralSettings.tsx:321
 msgid "Save Settings"
 msgstr "設定を保存"
 
@@ -5276,9 +5297,9 @@ msgstr "保存済み"
 #: packages/admin/src/components/Redirects.tsx:180
 #: packages/admin/src/components/SaveButton.tsx:42
 #: packages/admin/src/components/settings/GeneralSettings.tsx:125
-#: packages/admin/src/components/settings/GeneralSettings.tsx:296
-#: packages/admin/src/components/settings/SeoSettings.tsx:99
-#: packages/admin/src/components/settings/SeoSettings.tsx:162
+#: packages/admin/src/components/settings/GeneralSettings.tsx:321
+#: packages/admin/src/components/settings/SeoSettings.tsx:126
+#: packages/admin/src/components/settings/SeoSettings.tsx:251
 #: packages/admin/src/components/settings/SocialSettings.tsx:99
 #: packages/admin/src/components/settings/SocialSettings.tsx:173
 #: packages/admin/src/components/TaxonomyManager.tsx:474
@@ -5400,7 +5421,7 @@ msgstr "コメントを検索..."
 msgid "Search content..."
 msgstr "コンテンツを検索..."
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:128
+#: packages/admin/src/components/settings/SeoSettings.tsx:155
 msgid "Search Engine Optimization"
 msgstr "検索エンジン最適化"
 
@@ -5408,7 +5429,7 @@ msgstr "検索エンジン最適化"
 msgid "Search engine optimization and verification"
 msgstr "検索エンジン最適化と検証"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:519
+#: packages/admin/src/components/MediaPickerModal.tsx:565
 msgid "Search media"
 msgstr "メディアを検索"
 
@@ -5445,8 +5466,8 @@ msgstr "テーマを検索..."
 msgid "Search users"
 msgstr ""
 
-#: packages/admin/src/components/MediaLibrary.tsx:336
-#: packages/admin/src/components/MediaPickerModal.tsx:518
+#: packages/admin/src/components/MediaLibrary.tsx:342
+#: packages/admin/src/components/MediaPickerModal.tsx:564
 msgid "Search..."
 msgstr "検索..."
 
@@ -5455,7 +5476,7 @@ msgstr "検索..."
 msgid "Searchable"
 msgstr "検索可能"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:1948
+#: packages/admin/src/components/PortableTextEditor.tsx:1975
 msgid "Section"
 msgstr "セクション"
 
@@ -5582,8 +5603,12 @@ msgstr "{0}のコメントを選択"
 msgid "Select Content"
 msgstr "コンテンツを選択"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:258
-#: packages/admin/src/components/settings/GeneralSettings.tsx:314
+#: packages/admin/src/components/settings/SeoSettings.tsx:268
+msgid "Select Default Social Image"
+msgstr ""
+
+#: packages/admin/src/components/settings/GeneralSettings.tsx:283
+#: packages/admin/src/components/settings/GeneralSettings.tsx:344
 msgid "Select Favicon"
 msgstr "ファビコンを選択"
 
@@ -5591,7 +5616,7 @@ msgstr "ファビコンを選択"
 msgid "Select file"
 msgstr ""
 
-#: packages/admin/src/components/MediaPickerModal.tsx:125
+#: packages/admin/src/components/MediaPickerModal.tsx:138
 msgid "Select File"
 msgstr ""
 
@@ -5599,14 +5624,15 @@ msgstr ""
 msgid "Select image"
 msgstr "画像を選択"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:125
-#: packages/admin/src/components/PortableTextEditor.tsx:2310
-#: packages/admin/src/components/PortableTextEditor.tsx:2983
+#: packages/admin/src/components/MediaPickerModal.tsx:138
+#: packages/admin/src/components/PortableTextEditor.tsx:2337
+#: packages/admin/src/components/PortableTextEditor.tsx:3010
+#: packages/admin/src/components/settings/SeoSettings.tsx:221
 msgid "Select Image"
 msgstr "画像を選択"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:214
-#: packages/admin/src/components/settings/GeneralSettings.tsx:307
+#: packages/admin/src/components/settings/GeneralSettings.tsx:229
+#: packages/admin/src/components/settings/GeneralSettings.tsx:336
 msgid "Select Logo"
 msgstr "ロゴを選択"
 
@@ -5632,7 +5658,7 @@ msgstr "インポートするコンテンツタイプを選択してください
 msgid "Select..."
 msgstr "選択..."
 
-#: packages/admin/src/components/MediaPickerModal.tsx:653
+#: packages/admin/src/components/MediaPickerModal.tsx:719
 msgid "Selected:"
 msgstr "選択中:"
 
@@ -5684,8 +5710,8 @@ msgstr "送信中..."
 msgid "SEO"
 msgstr "SEO"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:78
-#: packages/admin/src/components/settings/SeoSettings.tsx:103
+#: packages/admin/src/components/settings/SeoSettings.tsx:105
+#: packages/admin/src/components/settings/SeoSettings.tsx:130
 msgid "SEO Settings"
 msgstr "SEO設定"
 
@@ -5693,7 +5719,7 @@ msgstr "SEO設定"
 msgid "SEO settings (Yoast)"
 msgstr "SEO設定（Yoast）"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:48
+#: packages/admin/src/components/settings/SeoSettings.tsx:57
 msgid "SEO settings saved"
 msgstr "SEO設定を保存しました"
 
@@ -5845,7 +5871,7 @@ msgstr "サイトタイトルは必須です"
 msgid "Site URL"
 msgstr "サイトURL"
 
-#: packages/admin/src/components/MediaLibrary.tsx:418
+#: packages/admin/src/components/MediaLibrary.tsx:430
 msgid "Size"
 msgstr "サイズ"
 
@@ -5943,7 +5969,7 @@ msgstr "スパム"
 msgid "Spam"
 msgstr "スパム"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2971
+#: packages/admin/src/components/PortableTextEditor.tsx:2998
 msgid "Spotlight Mode"
 msgstr ""
 
@@ -5967,8 +5993,8 @@ msgstr "ステータス"
 msgid "Status code"
 msgstr "ステータスコード"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2455
-#: packages/admin/src/components/PortableTextEditor.tsx:2761
+#: packages/admin/src/components/PortableTextEditor.tsx:2482
+#: packages/admin/src/components/PortableTextEditor.tsx:2788
 msgid "Strikethrough"
 msgstr ""
 
@@ -6075,7 +6101,7 @@ msgstr "タームを削除しました"
 msgid "test@example.com"
 msgstr "test@example.com"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2731
+#: packages/admin/src/components/PortableTextEditor.tsx:2758
 msgid "Text formatting"
 msgstr ""
 
@@ -6112,13 +6138,21 @@ msgstr "メニューを削除しました。"
 msgid "The name of your site, used in the header and metadata"
 msgstr "サイトの名前。ヘッダーとメタデータに使用されます"
 
-#: packages/admin/src/router.tsx:1739
+#: packages/admin/src/router.tsx:1752
 msgid "The page you're looking for doesn't exist."
 msgstr ""
 
 #: packages/admin/src/components/settings/GeneralSettings.tsx:172
 msgid "The public URL of your site (used for canonical links and sitemaps)"
 msgstr "サイトの公開URL（正規リンクとサイトマップに使用）"
+
+#: packages/admin/src/components/settings/SeoSettings.tsx:189
+msgid "The referenced image is no longer available. Pick a new one or remove the reference."
+msgstr ""
+
+#: packages/admin/src/components/settings/GeneralSettings.tsx:197
+msgid "The referenced logo is no longer available. Pick a new one or remove the reference."
+msgstr ""
 
 #: packages/admin/src/components/ThemeMarketplaceBrowse.tsx:153
 msgid "The theme marketplace is empty. Check back later."
@@ -6158,7 +6192,7 @@ msgstr "テーマ"
 msgid "This collection is defined in code. Some settings cannot be changed here. Edit your live.config.ts file to modify the schema."
 msgstr ""
 
-#: packages/admin/src/components/MediaPickerModal.tsx:361
+#: packages/admin/src/components/MediaPickerModal.tsx:405
 msgid "This field does not accept {sniffedMime} files."
 msgstr ""
 
@@ -6245,11 +6279,11 @@ msgstr "公開済みバージョンに戻ります。下書きの変更は失わ
 msgid "Thoughts, tutorials, and more"
 msgstr "記事、チュートリアルなど"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:285
+#: packages/admin/src/components/settings/GeneralSettings.tsx:310
 msgid "Timezone"
 msgstr "タイムゾーン"
 
-#: packages/admin/src/components/settings/GeneralSettings.tsx:288
+#: packages/admin/src/components/settings/GeneralSettings.tsx:313
 msgid "Timezone for displaying dates (e.g., America/New_York)"
 msgstr "日付表示のタイムゾーン（例: Asia/Tokyo）"
 
@@ -6266,7 +6300,7 @@ msgstr "タイトル"
 msgid "Title (Tooltip)"
 msgstr "タイトル（ツールチップ）"
 
-#: packages/admin/src/components/settings/SeoSettings.tsx:132
+#: packages/admin/src/components/settings/SeoSettings.tsx:159
 msgid "Title Separator"
 msgstr "タイトル区切り文字"
 
@@ -6282,7 +6316,7 @@ msgstr "にアクセスしてプラグインをインストールするか、ast
 msgid "to select"
 msgstr "選択"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2547
+#: packages/admin/src/components/PortableTextEditor.tsx:2574
 msgid "Toggle header row"
 msgstr "ヘッダー行を切り替え"
 
@@ -6363,8 +6397,8 @@ msgstr "ゴミ箱は空です。"
 msgid "True/false toggle"
 msgstr "真偽値のトグル"
 
-#: packages/admin/src/components/MediaLibrary.tsx:366
-#: packages/admin/src/components/MediaPickerModal.tsx:576
+#: packages/admin/src/components/MediaLibrary.tsx:378
+#: packages/admin/src/components/MediaPickerModal.tsx:628
 msgid "Try a different search term"
 msgstr "別の検索キーワードをお試しください"
 
@@ -6408,7 +6442,7 @@ msgid "Twitter"
 msgstr "Twitter"
 
 #: packages/admin/src/components/FieldEditor.tsx:571
-#: packages/admin/src/components/MediaLibrary.tsx:417
+#: packages/admin/src/components/MediaLibrary.tsx:429
 msgid "Type"
 msgstr "タイプ"
 
@@ -6427,12 +6461,12 @@ msgstr "マーケットプレイスに接続できません"
 msgid "Unassigned"
 msgstr "未割り当て"
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2448
-#: packages/admin/src/components/PortableTextEditor.tsx:2754
+#: packages/admin/src/components/PortableTextEditor.tsx:2475
+#: packages/admin/src/components/PortableTextEditor.tsx:2781
 msgid "Underline"
 msgstr ""
 
-#: packages/admin/src/components/PortableTextEditor.tsx:2951
+#: packages/admin/src/components/PortableTextEditor.tsx:2978
 msgid "Undo"
 msgstr ""
 
@@ -6574,11 +6608,11 @@ msgstr "コンテンツURLを更新中..."
 msgid "Updating..."
 msgstr "更新中..."
 
-#: packages/admin/src/components/MediaPickerModal.tsx:540
+#: packages/admin/src/components/MediaPickerModal.tsx:586
 msgid "Upload"
 msgstr "アップロード"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:127
+#: packages/admin/src/components/MediaPickerModal.tsx:140
 msgid "Upload a file to get started"
 msgstr ""
 
@@ -6586,7 +6620,7 @@ msgstr ""
 msgid "Upload an export file"
 msgstr "エクスポートファイルをアップロード"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:128
+#: packages/admin/src/components/MediaPickerModal.tsx:141
 msgid "Upload an image to get started"
 msgstr "画像をアップロードして始めましょう"
 
@@ -6604,31 +6638,31 @@ msgstr ""
 msgid "Upload Export File"
 msgstr "エクスポートファイルをアップロード"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:560
+#: packages/admin/src/components/MediaPickerModal.tsx:606
 msgid "Upload failed: {uploadError}"
 msgstr "アップロード失敗: {uploadError}"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:552
+#: packages/admin/src/components/MediaPickerModal.tsx:598
 msgid "Upload file"
 msgstr ""
 
-#: packages/admin/src/components/MediaPickerModal.tsx:129
+#: packages/admin/src/components/MediaPickerModal.tsx:142
 msgid "Upload File"
 msgstr ""
 
-#: packages/admin/src/components/MediaLibrary.tsx:323
+#: packages/admin/src/components/MediaLibrary.tsx:329
 msgid "Upload files"
 msgstr "ファイルをアップロード"
 
-#: packages/admin/src/components/MediaLibrary.tsx:357
+#: packages/admin/src/components/MediaLibrary.tsx:369
 msgid "Upload Files"
 msgstr "ファイルをアップロード"
 
-#: packages/admin/src/components/MediaPickerModal.tsx:129
+#: packages/admin/src/components/MediaPickerModal.tsx:142
 msgid "Upload Image"
 msgstr "画像をアップロード"
 
-#: packages/admin/src/components/MediaLibrary.tsx:354
+#: packages/admin/src/components/MediaLibrary.tsx:366
 msgid "Upload images, videos, and documents to get started."
 msgstr "画像、動画、ドキュメントをアップロードして始めましょう。"
 
@@ -6636,12 +6670,12 @@ msgstr "画像、動画、ドキュメントをアップロードして始めま
 msgid "Upload Media"
 msgstr "メディアをアップロード"
 
-#: packages/admin/src/components/MediaLibrary.tsx:368
+#: packages/admin/src/components/MediaLibrary.tsx:380
 msgid "Upload media to get started"
 msgstr "メディアをアップロードして始めましょう"
 
 #. placeholder {0}: activeProviderInfo?.name || t`Library`
-#: packages/admin/src/components/MediaLibrary.tsx:314
+#: packages/admin/src/components/MediaLibrary.tsx:320
 msgid "Upload to {0}"
 msgstr "{0}にアップロード"
 
@@ -6659,12 +6693,12 @@ msgstr "アップロード中"
 
 #. placeholder {0}: uploadState.progress.current
 #. placeholder {1}: uploadState.progress.total
-#: packages/admin/src/components/MediaLibrary.tsx:289
+#: packages/admin/src/components/MediaLibrary.tsx:295
 msgid "Uploading {0}/{1}..."
 msgstr "アップロード中 {0}/{1}..."
 
-#: packages/admin/src/components/MediaLibrary.tsx:290
-#: packages/admin/src/components/MediaPickerModal.tsx:540
+#: packages/admin/src/components/MediaLibrary.tsx:296
+#: packages/admin/src/components/MediaPickerModal.tsx:586
 msgid "Uploading..."
 msgstr "アップロード中..."
 
@@ -6672,7 +6706,7 @@ msgstr "アップロード中..."
 #: packages/admin/src/components/FieldEditor.tsx:586
 #: packages/admin/src/components/MenuEditor.tsx:331
 #: packages/admin/src/components/MenuEditor.tsx:501
-#: packages/admin/src/components/PortableTextEditor.tsx:2887
+#: packages/admin/src/components/PortableTextEditor.tsx:2914
 msgid "URL"
 msgstr "URL"
 
@@ -6700,6 +6734,10 @@ msgstr "デバイスの生体認証、セキュリティキー、またはPINで
 #: packages/admin/src/components/LoginPage.tsx:326
 msgid "Use your registered passkey to sign in securely."
 msgstr "登録済みのパスキーで安全にサインインできます。"
+
+#: packages/admin/src/components/settings/SeoSettings.tsx:173
+msgid "Used as the fallback Open Graph image when a page has none. Recommended size: 1200×630."
+msgstr ""
 
 #: packages/admin/src/components/TaxonomyManager.tsx:642
 msgid "Used as the identifier. Lowercase letters, numbers, and underscores only."
@@ -6795,7 +6833,7 @@ msgstr "メールプロバイダーの状態を確認し、テストメールを
 msgid "View in Marketplace"
 msgstr "マーケットプレイスで表示"
 
-#: packages/admin/src/components/MediaLibrary.tsx:227
+#: packages/admin/src/components/MediaLibrary.tsx:233
 msgid "View mode"
 msgstr "表示モード"
 
@@ -6983,7 +7021,7 @@ msgstr "自分のロールは変更できません"
 msgid "You have full access to manage this site, including users, settings, and all content."
 msgstr "ユーザー、設定、すべてのコンテンツを含む、サイト全体の管理権限があります。"
 
-#: packages/admin/src/router.tsx:1139
+#: packages/admin/src/router.tsx:1152
 msgid "You need Editor permissions to moderate comments."
 msgstr ""
 
