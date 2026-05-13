@@ -19,14 +19,12 @@ import { contentBylineInputSchema, contentSeoInput } from "#api/schemas.js";
 import type { EmDashHandlers } from "../astro/types.js";
 import { hasScope } from "../auth/api-tokens.js";
 import { jsonSchemaObjectToZod } from "./json-schema.js";
+import { pluginToolName } from "./plugin-tool-name.js";
 
 const COLLECTION_SLUG_PATTERN = /^[a-z][a-z0-9_]*$/;
 const MCP_TOOL_NAME_PATTERN = /^(?!.*__)[a-z][a-z0-9_]*$/;
 const LEADING_SLASH_PATTERN = /^\/+/;
 const FORWARD_SLASH_PATTERN = "/";
-const PLUGIN_SCOPE_PREFIX_PATTERN = /^@/;
-const PLUGIN_ID_DASH_PATTERN = /-/g;
-const AMBIGUOUS_PLUGIN_SEGMENT_PATTERN = /__/;
 /** http(s) scheme matcher used by `settings_update` URL validation. */
 const HTTP_SCHEME_PATTERN = /^https?:\/\//i;
 
@@ -237,27 +235,6 @@ function unwrap(result: HandlerResult): SuccessEnvelope | ErrorEnvelope {
  */
 function jsonResult(data: unknown): SuccessEnvelope {
 	return respondData(data);
-}
-
-function pluginToolName(pluginId: string, toolName: string): string {
-	const readableSegments = pluginId
-		.replace(PLUGIN_SCOPE_PREFIX_PATTERN, "")
-		.split(FORWARD_SLASH_PATTERN)
-		.map((segment) => segment.replace(PLUGIN_ID_DASH_PATTERN, "_"));
-	const readablePluginId = readableSegments.join("__");
-	if (readableSegments.some((segment) => AMBIGUOUS_PLUGIN_SEGMENT_PATTERN.test(segment))) {
-		return `${readablePluginId}__${stableToolNameHash(pluginId)}__${toolName}`;
-	}
-	return `${readablePluginId}__${toolName}`;
-}
-
-function stableToolNameHash(value: string): string {
-	let hash = 0x811c9dc5;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 0x01000193);
-	}
-	return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function normalizePluginToolRoute(route: string): string {

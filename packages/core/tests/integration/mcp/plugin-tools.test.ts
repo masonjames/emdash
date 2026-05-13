@@ -2,6 +2,7 @@ import { Role } from "@emdash-cms/auth";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import { pluginToolName } from "../../../src/mcp/plugin-tool-name.js";
 import { definePlugin } from "../../../src/plugins/define-plugin.js";
 import type { ResolvedPlugin } from "../../../src/plugins/types.js";
 import {
@@ -13,27 +14,6 @@ import {
 	type McpHarness,
 } from "../../utils/mcp-runtime.js";
 import { setupTestDatabaseWithCollections, teardownTestDatabase } from "../../utils/test-db.js";
-
-function pluginToolName(pluginId: string, toolName: string): string {
-	const readableSegments = pluginId
-		.replace(/^@/, "")
-		.split("/")
-		.map((segment) => segment.replace(/-/g, "_"));
-	const readablePluginId = readableSegments.join("__");
-	if (readableSegments.some((segment) => /__/.test(segment))) {
-		return `${readablePluginId}__${stableToolNameHash(pluginId)}__${toolName}`;
-	}
-	return `${readablePluginId}__${toolName}`;
-}
-
-function stableToolNameHash(value: string): string {
-	let hash = 0x811c9dc5;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 0x01000193);
-	}
-	return (hash >>> 0).toString(16).padStart(8, "0");
-}
 
 function createPluginWithMcpCapability(
 	id: string = "test-plugin",
