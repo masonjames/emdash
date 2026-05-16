@@ -365,6 +365,12 @@ export function injectCoreRoutes(injectRoute: InjectRoute): void {
 		entrypoint: resolveRoute("api/admin/plugins/marketplace/[id]/install.ts"),
 	});
 
+	// Experimental registry routes (see RFC 0001)
+	injectRoute({
+		pattern: "/_emdash/api/admin/plugins/registry/install",
+		entrypoint: resolveRoute("api/admin/plugins/registry/install.ts"),
+	});
+
 	injectRoute({
 		pattern: "/_emdash/api/admin/plugins/[id]/update",
 		entrypoint: resolveRoute("api/admin/plugins/[id]/update.ts"),
@@ -553,6 +559,11 @@ export function injectCoreRoutes(injectRoute: InjectRoute): void {
 	injectRoute({
 		pattern: "/_emdash/api/menus/[name]/items",
 		entrypoint: resolveRoute("api/menus/[name]/items.ts"),
+	});
+
+	injectRoute({
+		pattern: "/_emdash/api/menus/[name]/items/[id]",
+		entrypoint: resolveRoute("api/menus/[name]/items/[id].ts"),
 	});
 
 	injectRoute({
