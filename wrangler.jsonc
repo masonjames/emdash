@@ -1,8 +1,8 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	// Root-level Workers Builds deploys run from the monorepo root by default.
-	// This mirrors demos/playground/wrangler.jsonc but points Wrangler at the
-	// Astro-generated deployment output after building the playground package.
+	// Keep this config account-neutral for fork builds: no upstream custom
+	// domain routes and no hardcoded upstream KV namespace IDs.
 	"name": "emdash-playground",
 	"main": "demos/playground/dist/server/entry.mjs",
 	"compatibility_date": "2026-02-24",
@@ -35,33 +35,15 @@
 			"new_sqlite_classes": ["EmDashPreviewDB"],
 		},
 	],
+	"workers_dev": true,
 	"preview_urls": true,
 	"observability": {
 		"enabled": true,
 	},
-	"routes": [
-		{
-			"pattern": "try.emdashcms.com",
-			"zone_name": "emdashcms.com",
-			"custom_domain": true,
-		},
-	],
-	"kv_namespaces": [
-		{
-			"binding": "SESSION",
-			"id": "753be2785dfb4da886e837a90cd9a21a",
-		},
-	],
 	"images": {
 		"binding": "IMAGES",
 	},
 	"previews": {
-		"kv_namespaces": [
-			{
-				"binding": "SESSION",
-				"id": "753be2785dfb4da886e837a90cd9a21a",
-			},
-		],
 		"durable_objects": {
 			"bindings": [
 				{
