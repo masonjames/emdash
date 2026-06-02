@@ -3,7 +3,7 @@
 	// Root-level Workers Builds deploys run from the monorepo root by default.
 	// Keep this config account-neutral for fork builds: no upstream custom
 	// domain routes and no hardcoded upstream KV namespace IDs.
-	"name": "emdash-playground",
+	"name": "emdash",
 	"main": "demos/playground/dist/server/entry.mjs",
 	"compatibility_date": "2026-02-24",
 	"compatibility_flags": ["nodejs_compat"],
