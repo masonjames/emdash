@@ -68,6 +68,7 @@ const FIELD_TYPES = [
 	"number",
 	"integer",
 	"boolean",
+	"date",
 	"datetime",
 	"select",
 	"multiSelect",
