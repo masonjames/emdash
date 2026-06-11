@@ -20,6 +20,8 @@ import { matchesMimeAllowlist, normalizeMime } from "#media/mime.js";
 import { generatePlaceholder } from "#media/placeholder.js";
 import { computeContentHash } from "#utils/hash.js";
 
+import type { Storage } from "../../../storage/types.js";
+
 import type { MediaItem } from "../../types.js";
 
 export const prerender = false;
@@ -28,10 +30,17 @@ export const prerender = false;
  * Add URL to media items
  * Uses relative URLs to ensure portability across deployments
  */
-function addUrlToMedia(item: MediaItem): MediaItem & { url: string } {
+function addUrlToMedia(item: MediaItem, storage?: Storage): MediaItem & { url: string } {
+	// Prefer the configured public/CDN URL — serving originals through the
+	// Node proxy makes the Media Library crawl. Fall back to the relative
+	// proxy route when no public URL is configured (local driver, portability).
+	const publicUrl = storage?.getPublicUrl(item.storageKey);
 	return {
 		...item,
-		url: `/_emdash/api/media/file/${item.storageKey}`,
+		url:
+			publicUrl && /^https?:\/\//.test(publicUrl)
+				? publicUrl
+				: `/_emdash/api/media/file/${item.storageKey}`,
 	};
 }
 
@@ -64,7 +73,7 @@ export const GET: APIRoute = async ({ request, locals }) => {
 	}
 
 	// Add URL to each media item (relative URLs for portability)
-	const itemsWithUrl = result.data.items.map((item) => addUrlToMedia(item));
+	const itemsWithUrl = result.data.items.map((item) => addUrlToMedia(item, emdash.storage));
 
 	return apiSuccess({ items: itemsWithUrl, nextCursor: result.data.nextCursor });
 };
@@ -139,7 +148,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 		const existing = await repo.findByContentHash(contentHash);
 		if (existing) {
 			// Same content already exists - return existing item
-			const itemWithUrl = addUrlToMedia(existing);
+			const itemWithUrl = addUrlToMedia(existing, emdash.storage);
 			return apiSuccess({ item: itemWithUrl, deduplicated: true });
 		}
 
@@ -205,7 +214,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 		}
 
 		// Add URL to the response (relative URL for portability)
-		const itemWithUrl = addUrlToMedia(result.data.item);
+		const itemWithUrl = addUrlToMedia(result.data.item, emdash.storage);
 
 		return apiSuccess({ item: itemWithUrl }, 201);
 	} catch (error) {

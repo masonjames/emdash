@@ -14,6 +14,8 @@ import { requireOwnerPerm, requirePerm } from "#api/authorize.js";
 import { apiError, apiSuccess, handleError } from "#api/error.js";
 import { isParseError, parseOptionalBody } from "#api/parse.js";
 import { mediaConfirmBody } from "#api/schemas.js";
+import type { Storage } from "../../../../../storage/types.js";
+
 import type { MediaItem } from "#types";
 
 export const prerender = false;
@@ -21,10 +23,17 @@ export const prerender = false;
 /**
  * Add URL to media item (relative URL for portability)
  */
-function addUrlToMedia(item: MediaItem): MediaItem & { url: string } {
+function addUrlToMedia(item: MediaItem, storage?: Storage): MediaItem & { url: string } {
+	// Prefer the configured public/CDN URL — serving originals through the
+	// Node proxy makes the Media Library crawl. Fall back to the relative
+	// proxy route when no public URL is configured (local driver, portability).
+	const publicUrl = storage?.getPublicUrl(item.storageKey);
 	return {
 		...item,
-		url: `/_emdash/api/media/file/${item.storageKey}`,
+		url:
+			publicUrl && /^https?:\/\//.test(publicUrl)
+				? publicUrl
+				: `/_emdash/api/media/file/${item.storageKey}`,
 	};
 }
 
@@ -93,7 +102,7 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
 		}
 
 		// Add URL to the response (relative URL for portability)
-		const itemWithUrl = addUrlToMedia(item);
+		const itemWithUrl = addUrlToMedia(item, emdash.storage);
 
 		return apiSuccess({ item: itemWithUrl });
 	} catch (error) {
