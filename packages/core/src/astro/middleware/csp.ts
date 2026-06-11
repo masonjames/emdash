@@ -28,10 +28,18 @@ function getRegistryAggregatorOrigin(
 	}
 }
 
-export function buildEmDashCsp(registry?: RegistryConfigInput): string {
+export function buildEmDashCsp(
+	registry?: RegistryConfigInput,
+	clientUploadOrigin?: string,
+): string {
 	const connectSrc = ["connect-src 'self'"];
 	const registryAggregatorOrigin = getRegistryAggregatorOrigin(registry);
 	if (registryAggregatorOrigin) connectSrc.push(registryAggregatorOrigin);
+	// Signed direct uploads (S3-compatible storage) PUT from the browser to
+	// the storage endpoint; allow it or the Media Library upload flow breaks.
+	if (clientUploadOrigin && /^https?:\/\//.test(clientUploadOrigin)) {
+		connectSrc.push(clientUploadOrigin);
+	}
 
 	return [
 		"default-src 'self'",

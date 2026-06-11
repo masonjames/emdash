@@ -304,7 +304,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		if (!import.meta.env.DEV) {
 			response.headers.set(
 				"Content-Security-Policy",
-				buildEmDashCsp(context.locals.emdash?.config.experimental?.registry),
+				buildEmDashCsp(
+					context.locals.emdash?.config.experimental?.registry,
+					context.locals.emdash?.storage?.getClientUploadOrigin?.(),
+				),
 			);
 		}
 		return response;
@@ -316,7 +319,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	if (!import.meta.env.DEV) {
 		response.headers.set(
 			"Content-Security-Policy",
-			buildEmDashCsp(context.locals.emdash?.config.experimental?.registry),
+			buildEmDashCsp(
+					context.locals.emdash?.config.experimental?.registry,
+					context.locals.emdash?.storage?.getClientUploadOrigin?.(),
+				),
 		);
 	}
 

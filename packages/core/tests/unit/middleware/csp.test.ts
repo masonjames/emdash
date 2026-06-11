@@ -35,6 +35,29 @@ describe("buildEmDashCsp", () => {
 		expect(connectSrc).toBe("connect-src 'self' https://registry.emdashcms.com");
 	});
 
+	it("allows the client upload origin in connect-src for signed direct uploads", () => {
+		const csp = buildEmDashCsp(undefined, "https://acct.r2.cloudflarestorage.com");
+		const connectSrc = csp.split("; ").find((d) => d.startsWith("connect-src"));
+		expect(connectSrc).toBe("connect-src 'self' https://acct.r2.cloudflarestorage.com");
+	});
+
+	it("combines registry and client upload origins in connect-src", () => {
+		const csp = buildEmDashCsp(
+			"https://registry.emdashcms.com",
+			"https://acct.r2.cloudflarestorage.com",
+		);
+		const connectSrc = csp.split("; ").find((d) => d.startsWith("connect-src"));
+		expect(connectSrc).toBe(
+			"connect-src 'self' https://registry.emdashcms.com https://acct.r2.cloudflarestorage.com",
+		);
+	});
+
+	it("ignores non-http(s) client upload origins", () => {
+		const csp = buildEmDashCsp(undefined, "javascript:alert(1)");
+		const connectSrc = csp.split("; ").find((d) => d.startsWith("connect-src"));
+		expect(connectSrc).toBe("connect-src 'self'");
+	});
+
 	it("blocks framing with frame-ancestors none", () => {
 		const csp = buildEmDashCsp();
 		expect(csp).toContain("frame-ancestors 'none'");

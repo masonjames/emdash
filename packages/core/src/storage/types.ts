@@ -195,6 +195,14 @@ export interface Storage {
 	 * Get public URL for a file
 	 */
 	getPublicUrl(key: string): string;
+
+	/**
+	 * Origin browsers connect to for signed direct uploads, if uploads leave
+	 * the site origin. Used to extend the admin CSP connect-src — without it,
+	 * `connect-src 'self'` blocks the PUT to S3-compatible storage. Backends
+	 * whose uploads stay same-origin (local) return undefined.
+	 */
+	getClientUploadOrigin?(): string | undefined;
 }
 
 /**

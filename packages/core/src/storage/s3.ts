@@ -326,6 +326,16 @@ export class S3Storage implements Storage {
 		// No public URL configured; defer to the /_emdash/api/media/file route.
 		return `/_emdash/api/media/file/${key}`;
 	}
+
+	getClientUploadOrigin(): string | undefined {
+		// Signed upload URLs point at the S3 endpoint; the admin CSP must
+		// allow browsers to connect to it for direct uploads.
+		try {
+			return new URL(this.endpoint).origin;
+		} catch {
+			return undefined;
+		}
+	}
 }
 
 /**
