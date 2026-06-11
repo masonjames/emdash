@@ -1,0 +1,59 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// Root-level Workers Builds deploys run from the monorepo root by default.
+	// Keep this config account-neutral for fork builds: no upstream custom
+	// domain routes and no hardcoded upstream KV namespace IDs.
+	"name": "emdash",
+	"main": "demos/playground/dist/server/entry.mjs",
+	"compatibility_date": "2026-02-24",
+	"compatibility_flags": ["nodejs_compat"],
+	"no_bundle": true,
+	"rules": [
+		{
+			"type": "ESModule",
+			"globs": ["**/*.js", "**/*.mjs"],
+		},
+	],
+	"build": {
+		"command": "pnpm --filter @emdash-cms/playground run build:all",
+	},
+	"assets": {
+		"binding": "ASSETS",
+		"directory": "demos/playground/dist/client",
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "PLAYGROUND_DB",
+				"class_name": "EmDashPreviewDB",
+			},
+		],
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["EmDashPreviewDB"],
+		},
+	],
+	"workers_dev": true,
+	"preview_urls": true,
+	"observability": {
+		"enabled": true,
+	},
+	"images": {
+		"binding": "IMAGES",
+	},
+	"previews": {
+		"durable_objects": {
+			"bindings": [
+				{
+					"name": "PLAYGROUND_DB",
+					"class_name": "EmDashPreviewDB",
+				},
+			],
+		},
+		"images": {
+			"binding": "IMAGES",
+		},
+	},
+}
