@@ -40,6 +40,7 @@ function createMemoryStorage(): {
 		exists: (key: string) => Promise<boolean>;
 		list: () => Promise<string[]>;
 		getSignedUploadUrl: () => Promise<string>;
+		getPublicUrl: (key: string) => string;
 	};
 } {
 	const store = new Map<string, StorageEntry>();
@@ -61,6 +62,9 @@ function createMemoryStorage(): {
 		},
 		async getSignedUploadUrl() {
 			return "http://localhost/signed";
+		},
+		getPublicUrl(key: string) {
+			return `/_emdash/api/media/file/${key}`;
 		},
 	};
 	return { store, storage };
