@@ -26,7 +26,13 @@ import { LocaleSwitcher } from "./LocaleSwitcher";
 import { RouterLinkButton } from "./RouterLinkButton.js";
 
 /** Sortable content list columns. Maps to the server's order field whitelist. */
-export type ContentListSortField = "title" | "status" | "locale" | "updatedAt";
+export type ContentListSortField =
+	| "title"
+	| "status"
+	| "locale"
+	| "createdAt"
+	| "updatedAt"
+	| "publishedAt";
 export interface ContentListSort {
 	field: ContentListSortField;
 	direction: "asc" | "desc";
@@ -111,6 +117,9 @@ export interface ContentListProps {
 	/** Controlled date-range filter state. */
 	dateFilter?: ContentDateFilter;
 	onDateFilterChange?: (filter: ContentDateFilter) => void;
+	/** Which timestamp the table's Date column should display and sort by. */
+	dateField?: ContentDateField;
+	dateLabel?: string;
 }
 
 type ViewTab = "all" | "trash";
@@ -162,6 +171,8 @@ export function ContentList({
 	onAuthorFilterChange,
 	dateFilter = EMPTY_DATE_FILTER,
 	onDateFilterChange,
+	dateField = "updatedAt",
+	dateLabel,
 }: ContentListProps) {
 	const { t } = useLingui();
 	const [activeTab, setActiveTab] = React.useState<ViewTab>("all");
@@ -336,10 +347,10 @@ export function ContentList({
 										/>
 									)}
 									<SortableTh
-										field="updatedAt"
+										field={dateField}
 										sort={sort}
 										onSortChange={onSortChange}
-										label={t`Date`}
+										label={dateLabel ?? t`Date`}
 									/>
 									<th scope="col" className="px-4 py-3 text-end text-sm font-medium">
 										{t`Actions`}
@@ -392,6 +403,7 @@ export function ContentList({
 											onDuplicate={onDuplicate}
 											showLocale={!!i18n}
 											urlPattern={urlPattern}
+											dateField={dateField}
 										/>
 									))
 								)}
@@ -757,6 +769,7 @@ interface ContentListItemProps {
 	onDuplicate?: (id: string) => void;
 	showLocale?: boolean;
 	urlPattern?: string;
+	dateField: ContentDateField;
 }
 
 function ContentListItem({
@@ -766,10 +779,12 @@ function ContentListItem({
 	onDuplicate,
 	showLocale,
 	urlPattern,
+	dateField,
 }: ContentListItemProps) {
 	const { t } = useLingui();
 	const title = getItemTitle(item);
-	const date = new Date(item.updatedAt || item.createdAt);
+	const dateValue = item[dateField] ?? item.updatedAt ?? item.createdAt;
+	const date = new Date(dateValue);
 
 	return (
 		<tr className="hover:bg-kumo-tint/25">

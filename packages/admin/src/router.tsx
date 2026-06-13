@@ -314,8 +314,12 @@ function ContentListPage() {
 
 	// Controlled sort state — passed to the list, and included in the query
 	// key so changing direction invalidates the current cursor chain.
+	const defaultListDateField: ContentListSort["field"] =
+		collection === "posts" ? "publishedAt" : "updatedAt";
+	const defaultFilterDateField: ContentDateFilter["field"] =
+		collection === "posts" ? "publishedAt" : "createdAt";
 	const [sort, setSort] = React.useState<ContentListSort>({
-		field: "updatedAt",
+		field: defaultListDateField,
 		direction: "desc",
 	});
 
@@ -327,7 +331,17 @@ function ContentListPage() {
 	// them restarts the cursor chain from a filtered first page.
 	const [statusFilter, setStatusFilter] = React.useState<ContentStatusFilter>("all");
 	const [authorFilter, setAuthorFilter] = React.useState("");
-	const [dateFilter, setDateFilter] = React.useState<ContentDateFilter>(EMPTY_DATE_FILTER);
+	const [dateFilter, setDateFilter] = React.useState<ContentDateFilter>({
+		...EMPTY_DATE_FILTER,
+		field: defaultFilterDateField,
+	});
+
+	React.useEffect(() => {
+		setSort({ field: defaultListDateField, direction: "desc" });
+		setDateFilter((current) =>
+			current.from || current.to ? current : { ...EMPTY_DATE_FILTER, field: defaultFilterDateField },
+		);
+	}, [collection, defaultFilterDateField, defaultListDateField]);
 
 	// The date inputs yield calendar dates; widen them to UTC day boundaries so
 	// the inclusive `dateTo` covers the whole day (timestamps are stored in UTC).
@@ -498,6 +512,8 @@ function ContentListPage() {
 			urlPattern={collectionConfig.urlPattern}
 			sort={sort}
 			onSortChange={setSort}
+			dateField={defaultListDateField}
+			dateLabel={collection === "posts" ? t`Published` : undefined}
 			total={total}
 			onSearchChange={setSearchTerm}
 			statusFilter={statusFilter}
@@ -789,7 +805,18 @@ function ContentEditPage() {
 			skipRevision?: boolean;
 			seo?: ContentSeoInput;
 		}) => updateContent(collection, id, data, { locale: rawItem?.locale ?? activeLocale }),
-		onSuccess: () => {
+		onSuccess: (savedItem, variables) => {
+			patchAutosaveQueries(queryClient, {
+				collection,
+				id,
+				savedItem,
+				payload: {
+					data: variables.data,
+					slug: variables.slug,
+				},
+				locale: rawItem?.locale ?? activeLocale,
+			});
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
 			});
@@ -800,6 +827,9 @@ function ContentEditPage() {
 				void queryClient.invalidateQueries({
 					queryKey: ["revision", rawItem.draftRevisionId],
 				});
+			}
+			if (savedItem.draftRevisionId && savedItem.draftRevisionId !== rawItem?.draftRevisionId) {
+				void queryClient.invalidateQueries({ queryKey: ["revision", savedItem.draftRevisionId] });
 			}
 		},
 		onError: (error) => {
@@ -852,6 +882,7 @@ function ContentEditPage() {
 	const publishMutation = useMutation({
 		mutationFn: () => publishContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
 			});
@@ -870,6 +901,7 @@ function ContentEditPage() {
 	const unpublishMutation = useMutation({
 		mutationFn: () => unpublishContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
 			});
@@ -888,6 +920,7 @@ function ContentEditPage() {
 	const discardDraftMutation = useMutation({
 		mutationFn: () => discardDraft(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
 			});
@@ -910,6 +943,7 @@ function ContentEditPage() {
 		mutationFn: (scheduledAt: string) =>
 			scheduleContent(collection, id, scheduledAt, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
 			});
@@ -931,6 +965,7 @@ function ContentEditPage() {
 		mutationFn: () =>
 			unscheduleContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
 			});
@@ -1116,9 +1151,6 @@ function MediaPage() {
 
 	const uploadMutation = useMutation({
 		mutationFn: (file: File) => uploadMedia(file),
-		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["media"] });
-		},
 	});
 
 	const deleteMutation = useMutation({
@@ -1142,7 +1174,11 @@ function MediaPage() {
 			isLoading={isLoading || isFetchingNextPage}
 			hasMore={!!hasNextPage}
 			onLoadMore={() => void fetchNextPage()}
-			onUpload={(file) => uploadMutation.mutateAsync(file).then(() => undefined)}
+			onUpload={async (file) => {
+				await uploadMutation.mutateAsync(file);
+				await queryClient.invalidateQueries({ queryKey: ["media"] });
+				await queryClient.refetchQueries({ queryKey: ["media"], type: "active" });
+			}}
 			onDelete={(id) => deleteMutation.mutate(id)}
 			onLocalSearchChange={setSearch}
 			onLocalMimeFilterChange={setMimeFilter}

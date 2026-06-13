@@ -2543,8 +2543,15 @@ export class EmDashRuntime {
 						}
 					}
 				}
-			} catch {
-				// Don't fail the update if revision creation fails
+			} catch (error) {
+				console.error("[emdash] draft revision save failed:", error);
+				return {
+					success: false as const,
+					error: {
+						code: "REVISION_SAVE_ERROR",
+						message: "Failed to save draft revision",
+					},
+				};
 			}
 		}
 

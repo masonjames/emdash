@@ -15,7 +15,9 @@ export const API_BASE = "/_emdash/api";
 export function apiFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
 	const headers = new Headers(init?.headers);
 	headers.set("X-EmDash-Request", "1");
-	return fetch(input, { ...init, headers });
+	const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+	const cache = init?.cache ?? (method === "GET" ? "no-store" : undefined);
+	return fetch(input, { ...init, headers, cache });
 }
 
 /**
