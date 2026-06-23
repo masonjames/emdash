@@ -26,6 +26,8 @@ import type { MediaItem } from "../../types.js";
 
 export const prerender = false;
 
+const HTTP_URL_RE = /^https?:\/\//;
+
 /**
  * Add URL to media items
  * Uses relative URLs to ensure portability across deployments
@@ -38,7 +40,7 @@ function addUrlToMedia(item: MediaItem, storage?: Storage): MediaItem & { url: s
 	return {
 		...item,
 		url:
-			publicUrl && /^https?:\/\//.test(publicUrl)
+			publicUrl && HTTP_URL_RE.test(publicUrl)
 				? publicUrl
 				: `/_emdash/api/media/file/${item.storageKey}`,
 	};

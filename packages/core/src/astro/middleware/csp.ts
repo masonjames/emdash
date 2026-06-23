@@ -13,6 +13,8 @@
  */
 import type { RegistryConfigInput } from "../../registry/types.js";
 
+const HTTP_URL_RE = /^https?:\/\//;
+
 function getRegistryAggregatorOrigin(
 	registry: RegistryConfigInput | undefined,
 ): string | undefined {
@@ -37,7 +39,7 @@ export function buildEmDashCsp(
 	if (registryAggregatorOrigin) connectSrc.push(registryAggregatorOrigin);
 	// Signed direct uploads (S3-compatible storage) PUT from the browser to
 	// the storage endpoint; allow it or the Media Library upload flow breaks.
-	if (clientUploadOrigin && /^https?:\/\//.test(clientUploadOrigin)) {
+	if (clientUploadOrigin && HTTP_URL_RE.test(clientUploadOrigin)) {
 		connectSrc.push(clientUploadOrigin);
 	}
 
