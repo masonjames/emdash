@@ -122,6 +122,12 @@ const pendingBumps: Set<string> =
 		return s;
 	})();
 
+function isDevRuntime(): boolean {
+	return (
+		((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV ?? false) === true
+	);
+}
+
 /**
  * Resolve (once per isolate) the configured object-cache backend.
  *
@@ -167,7 +173,7 @@ async function getBackend(): Promise<ObjectCacheBackend | null> {
 		} catch (error) {
 			// Importing the virtual module fails outside an Astro/Vite context
 			// (e.g. unit tests, CLI). Treat as "no cache configured".
-			if (import.meta.env.DEV) {
+			if (isDevRuntime()) {
 				console.warn("[object-cache] backend unavailable:", error);
 			}
 			holder.backend = null;
@@ -378,7 +384,7 @@ export async function cachedQuery<T>(options: CachedQueryOptions<T>): Promise<T>
 				const encoded = encode({ e: currentEpochs, v: value } satisfies CacheEnvelope<T>);
 				await backend.set(fullKey, encoded, ttl);
 			} catch (error) {
-				if (import.meta.env.DEV) {
+				if (isDevRuntime()) {
 					console.warn("[object-cache] set failed:", error);
 				}
 			}
