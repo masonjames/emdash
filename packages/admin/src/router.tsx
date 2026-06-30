@@ -817,8 +817,13 @@ function ContentEditPage() {
 				locale: rawItem?.locale ?? activeLocale,
 			});
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
+			// Invalidate by (collection, id) prefix without the locale object: the
+			// editor's read query is keyed `{ locale: activeLocale }` (undefined when
+			// i18n is off) while `rawItem.locale` is the DB default "en", so a
+			// locale-scoped invalidation key would not match and the item would never
+			// refetch — leaving the publish/save buttons stale until a hard refresh.
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
+				queryKey: ["content", collection, id],
 			});
 			// Also invalidate revisions since a new one was created
 			void queryClient.invalidateQueries({ queryKey: ["revisions", collection, id] });
@@ -884,7 +889,7 @@ function ContentEditPage() {
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
+				queryKey: ["content", collection, id],
 			});
 			void queryClient.invalidateQueries({ queryKey: ["revisions", collection, id] });
 			toastManager.add({ title: t`Published`, description: t`Content is now live` });
@@ -903,7 +908,7 @@ function ContentEditPage() {
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
+				queryKey: ["content", collection, id],
 			});
 			void queryClient.invalidateQueries({ queryKey: ["revisions", collection, id] });
 			toastManager.add({ title: t`Unpublished`, description: t`Content removed from public view` });
@@ -922,7 +927,7 @@ function ContentEditPage() {
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
+				queryKey: ["content", collection, id],
 			});
 			void queryClient.invalidateQueries({ queryKey: ["revisions", collection, id] });
 			toastManager.add({
@@ -945,7 +950,7 @@ function ContentEditPage() {
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
+				queryKey: ["content", collection, id],
 			});
 			toastManager.add({
 				title: t`Scheduled`,
@@ -967,7 +972,7 @@ function ContentEditPage() {
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id, { locale: rawItem?.locale ?? activeLocale }],
+				queryKey: ["content", collection, id],
 			});
 			toastManager.add({
 				title: t`Unscheduled`,
