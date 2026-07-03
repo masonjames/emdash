@@ -570,3 +570,89 @@ test.describe("Trash from editor", () => {
 		expect(getRes.status).toBe(404);
 	});
 });
+
+// ==========================================================================
+// Publication date editing
+// ==========================================================================
+
+test.describe("Edit publication date", () => {
+	let headers: Record<string, string>;
+	let baseUrl: string;
+	let postId: string;
+
+	test.beforeEach(async ({ admin, serverInfo }) => {
+		await admin.devBypassAuth();
+		baseUrl = serverInfo.baseUrl;
+		headers = apiHeaders(serverInfo.token, baseUrl);
+
+		// Create and publish a post so the sidebar shows a publication date
+		postId = await createPost(
+			baseUrl,
+			headers,
+			"Publish Date Test Post",
+			`publish-date-${Date.now()}`,
+		);
+		await publishPost(baseUrl, headers, postId);
+	});
+
+	test.afterEach(async () => {
+		await cleanupPost(baseUrl, headers, postId);
+	});
+
+	test("editor can backdate a published post from the sidebar", async ({ admin, page }) => {
+		await admin.goToEditContent("posts", postId);
+		await admin.waitForLoading();
+
+		// The "Published on" field mirrors the current publication date
+		const dateInput = page.getByLabel("Published on");
+		await expect(dateInput).toBeVisible({ timeout: 5000 });
+		await expect(dateInput).not.toHaveValue("");
+
+		// Backdate it (e.g. restoring the original date after a migration)
+		await dateInput.fill("2025-10-21T16:00");
+		const updateButton = page.getByRole("button", { name: "Update date" });
+		await expect(updateButton).toBeVisible({ timeout: 5000 });
+
+		const updateResponse = page.waitForResponse(
+			(res) =>
+				res.url().includes(`/api/content/posts/${postId}`) &&
+				res.request().method() === "PUT" &&
+				res.status() === 200,
+			{ timeout: 10000 },
+		);
+		await updateButton.click();
+		await updateResponse;
+
+		// A toast confirms the change
+		await expect(page.getByRole("heading", { name: "Publication date updated" })).toBeVisible({
+			timeout: 5000,
+		});
+
+		// The server persisted the exact backdated value
+		const getRes = await fetch(`${baseUrl}/_emdash/api/content/posts/${postId}`, { headers });
+		const json: any = await getRes.json();
+		expect(json.data?.item?.publishedAt).toBe("2025-10-21T16:00:00.000Z");
+
+		// Once the input matches the server value again, the action buttons collapse
+		await expect(updateButton).not.toBeVisible({ timeout: 5000 });
+	});
+
+	test("draft posts do not show the publication date field", async ({ admin, page }) => {
+		const draftId = await createPost(
+			baseUrl,
+			headers,
+			"Draft Date Post",
+			`draft-date-${Date.now()}`,
+		);
+		try {
+			await admin.goToEditContent("posts", draftId);
+			await admin.waitForLoading();
+
+			// Drafts have no publishedAt, so there is nothing to edit
+			await expect(page.locator("#field-title")).toHaveValue("Draft Date Post");
+			await expect(page.getByLabel("Published on")).not.toBeVisible();
+		} finally {
+			await cleanupPost(baseUrl, headers, draftId);
+		}
+	});
+});

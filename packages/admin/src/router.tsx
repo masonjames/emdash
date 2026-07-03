@@ -889,6 +889,24 @@ function ContentEditPage() {
 		},
 	});
 
+	const updatePublishedAtMutation = useMutation({
+		mutationFn: (publishedAt: string) =>
+			updateContent(collection, id, { publishedAt }, { locale: rawItem?.locale ?? activeLocale }),
+		onSuccess: () => {
+			// Prefix invalidation also refreshes list queries, whose date
+			// column and ordering change with the publication date.
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
+			toastManager.add({ title: t`Publication date updated` });
+		},
+		onError: (error) => {
+			toastManager.add({
+				title: t`Failed to update publication date`,
+				description: error instanceof Error ? error.message : t`An error occurred`,
+				type: "error",
+			});
+		},
+	});
+
 	const publishMutation = useMutation({
 		mutationFn: () => publishContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
@@ -1101,6 +1119,8 @@ function ContentEditPage() {
 			onSchedule={(scheduledAt) => scheduleMutation.mutate(scheduledAt)}
 			onUnschedule={() => unscheduleMutation.mutate()}
 			isScheduling={scheduleMutation.isPending}
+			onUpdatePublishedAt={(publishedAt) => updatePublishedAtMutation.mutate(publishedAt)}
+			isUpdatingPublishedAt={updatePublishedAtMutation.isPending}
 			onDelete={() => deleteMutation.mutate()}
 			isDeleting={deleteMutation.isPending}
 			supportsDrafts={collectionConfig.supports.includes("drafts")}
