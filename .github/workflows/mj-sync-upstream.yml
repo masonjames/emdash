@@ -1,0 +1,173 @@
+# mj-sync-upstream — keep the masonjames/emdash fork current with upstream
+# while carrying PR #1366 (+ local patches) on mj/prod.
+#
+# Branching model (masonjames.com docs/prd/emdash-production/prd.md AD-2):
+#   main    = pristine fast-forward mirror of emdash-cms/emdash main
+#   mj/prod = main + carried PR branches + local patches (the only branch
+#             the site's vendor-emdash.mjs builds from)
+#
+# This workflow lives on mj/prod, which is the repo's DEFAULT branch so the
+# cron trigger works (GitHub runs scheduled workflows from the default branch
+# only). It must never be added to main — main mirrors upstream exactly.
+#
+# On success it pushes the refreshed mirror + merged mj/prod. On merge
+# conflict or build/test failure it opens an issue (and sends an ntfy alert
+# when NTFY_URL/NTFY_TOKEN secrets are configured) and leaves the branches
+# untouched. The site repo picks up new mj/prod commits via
+# scripts/mj/sync-emdash.sh (vendor tarball refresh) — that half stays
+# local-first by design.
+#
+# Note: GitHub auto-disables cron workflows after ~60 days without repo
+# activity; successful sync pushes count as activity, and a manual
+# workflow_dispatch re-enables it.
+
+name: mj-sync-upstream
+
+on:
+  schedule:
+    - cron: "17 9 * * 1" # Mondays 09:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: mj-sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # Never run outside the personal fork (e.g. if this file ever reaches
+    # another fork or, unthinkably, upstream).
+    if: github.repository == 'masonjames/emdash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: mj/prod
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "mj-sync-upstream[bot]"
+          git config user.email "masonjames@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/emdash-cms/emdash.git
+          git fetch upstream main
+
+      - name: Mirror upstream main -> fork main (ff-only by construction)
+        run: git push origin upstream/main:refs/heads/main
+
+      - name: Merge upstream/main into mj/prod
+        id: merge
+        run: |
+          echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          if git merge --no-edit upstream/main; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | head -50 > /tmp/mj-conflicts.txt
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "after=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fail on merge conflict (issue carries the details)
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Weekly upstream sync hit a merge conflict merging upstream/main (${{ steps.merge.outputs.upstream }}) into mj/prod."
+            echo
+            echo "Conflicted files:"
+            echo '```'
+            cat /tmp/mj-conflicts.txt
+            echo '```'
+            echo
+            echo "Resolve locally per masonjames.com docs/prd/emdash-production/prd.md AD-2:"
+            echo '`git fetch origin && git checkout mj/prod && git merge origin/main` (or upstream directly), resolve, build, test, push.'
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > /tmp/mj-issue.md
+          gh issue create \
+            --title "mj-sync-upstream: merge conflict with upstream ($(date -u +%F))" \
+            --body-file /tmp/mj-issue.md
+          exit 1
+
+      - name: Detect whether anything changed
+        id: changed
+        run: |
+          if [ "${{ steps.merge.outputs.before }}" = "${{ steps.merge.outputs.after }}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        if: steps.changed.outputs.changed == 'true'
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        if: steps.changed.outputs.changed == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        if: steps.changed.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Build core + admin (the packages the site vendors first)
+        if: steps.changed.outputs.changed == 'true'
+        run: pnpm --filter emdash --filter @emdash-cms/admin build
+
+      - name: Run the PR #1366 media test suites (the carried feature)
+        if: steps.changed.outputs.changed == 'true'
+        working-directory: packages/admin
+        run: pnpm exec vitest run tests/components/MediaLibrary.test.tsx tests/components/MediaPickerModal.test.tsx
+
+      - name: Push merged mj/prod
+        if: steps.changed.outputs.changed == 'true'
+        run: git push origin mj/prod
+
+      - name: Carried-patch status report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_STATE=$(gh api repos/emdash-cms/emdash/pulls/1366 --jq '{state: .state, merged: .merged}' 2>/dev/null || echo '{"state":"unknown"}')
+          CARRIED=$(git log --oneline --no-merges upstream/main..mj/prod | wc -l | tr -d ' ')
+          {
+            echo "## mj-sync-upstream"
+            echo
+            if [ "${{ steps.changed.outputs.changed }}" = "true" ]; then
+              echo "- Merged upstream/main \`${{ steps.merge.outputs.upstream }}\` into mj/prod: \`${{ steps.merge.outputs.before }}\` → \`$(git rev-parse HEAD)\`"
+              echo "- Build + #1366 media tests: green; mj/prod pushed"
+              echo "- **Next (local):** run \`scripts/mj/sync-emdash.sh\` in masonjames.com to re-vendor, gate, and stage a deploy branch"
+            else
+              echo "- Already up to date with upstream/main (\`${{ steps.merge.outputs.upstream }}\`) — nothing to do"
+            fi
+            echo "- Carried non-upstream commits on mj/prod: **$CARRIED**"
+            echo "- Upstream PR #1366: \`$PR_STATE\`"
+            if echo "$PR_STATE" | grep -q '"merged":true'; then
+              echo
+              echo "> **PR #1366 has merged upstream.** The next merge from upstream should deduplicate the carried commits automatically; consider retiring the remaining local patches."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify failure (ntfy, optional)
+        if: failure()
+        env:
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+        run: |
+          [ -z "$NTFY_URL" ] && { echo "ntfy not configured; skipping"; exit 0; }
+          curl -fsS -m 15 \
+            -H "Authorization: Bearer $NTFY_TOKEN" \
+            -H "Title: emdash fork sync failed" \
+            -H "Priority: high" \
+            -H "Tags: warning,emdash" \
+            -d "mj-sync-upstream failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "$NTFY_URL" || true
