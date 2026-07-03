@@ -143,6 +143,10 @@ export interface ContentEditorProps {
 	onUnschedule?: () => void;
 	/** Whether scheduling is in progress */
 	isScheduling?: boolean;
+	/** Callback to change the publication date of an already-published entry */
+	onUpdatePublishedAt?: (publishedAt: string) => void;
+	/** Whether a publication-date update is in progress */
+	isUpdatingPublishedAt?: boolean;
 	/** Whether this collection supports drafts */
 	supportsDrafts?: boolean;
 	/** Whether this collection supports revisions */
@@ -218,6 +222,8 @@ export function ContentEditor({
 	onSchedule,
 	onUnschedule,
 	isScheduling,
+	onUpdatePublishedAt,
+	isUpdatingPublishedAt,
 	supportsDrafts = false,
 	supportsRevisions = false,
 	supportsPreview = false,
@@ -555,6 +561,20 @@ export function ContentEditor({
 	const [scheduleDate, setScheduleDate] = React.useState<string>("");
 	const [showScheduler, setShowScheduler] = React.useState(false);
 
+	// Publication date editing — editors can correct published_at (e.g.
+	// restoring original dates after a migration). The input mirrors the
+	// server value (UTC round-trip) and re-syncs whenever it changes.
+	const publishedAtValue = toDatetimeLocalInputValue(item?.publishedAt ?? null);
+	const [publishedAtInput, setPublishedAtInput] = React.useState(publishedAtValue);
+	React.useEffect(() => {
+		setPublishedAtInput(publishedAtValue);
+	}, [publishedAtValue]);
+	const canEditPublishedAt =
+		!isNew &&
+		Boolean(item?.publishedAt) &&
+		Boolean(onUpdatePublishedAt) &&
+		Boolean(currentUser && currentUser.role >= ROLE_EDITOR);
+
 	// Distraction-free mode state
 	const [isDistractionFree, setIsDistractionFree] = React.useState(false);
 
@@ -870,6 +890,39 @@ export function ContentEditor({
 												<Button type="button" variant="outline" size="sm" onClick={onUnschedule}>
 													{t`Unschedule`}
 												</Button>
+											</div>
+										)}
+										{canEditPublishedAt && (
+											<div className="mt-2 space-y-2 rounded-md border px-3 py-2">
+												<Input
+													label={t`Published on`}
+													type="datetime-local"
+													value={publishedAtInput}
+													onChange={(e) => setPublishedAtInput(e.target.value)}
+												/>
+												{publishedAtInput !== publishedAtValue && (
+													<div className="flex gap-2">
+														<Button
+															type="button"
+															size="sm"
+															onClick={() =>
+																onUpdatePublishedAt?.(fromDatetimeLocalInputValue(publishedAtInput))
+															}
+															disabled={!publishedAtInput || isUpdatingPublishedAt}
+															icon={isUpdatingPublishedAt ? <Loader size="sm" /> : undefined}
+														>
+															{t`Update date`}
+														</Button>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															onClick={() => setPublishedAtInput(publishedAtValue)}
+														>
+															{t`Cancel`}
+														</Button>
+													</div>
+												)}
 											</div>
 										)}
 									</div>

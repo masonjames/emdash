@@ -112,6 +112,8 @@ export interface UpdateContentInput {
 	/** Skip revision creation (used by autosave) */
 	skipRevision?: boolean;
 	seo?: ContentSeoInput;
+	/** Override the publication date. The server requires content:publish_any. */
+	publishedAt?: string | null;
 }
 
 /**
