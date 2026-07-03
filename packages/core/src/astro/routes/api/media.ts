@@ -36,7 +36,10 @@ function addUrlToMedia(item: MediaItem, storage?: Storage): MediaItem & { url: s
 	// Prefer the configured public/CDN URL — serving originals through the
 	// Node proxy makes the Media Library crawl. Fall back to the relative
 	// proxy route when no public URL is configured (local driver, portability).
-	const publicUrl = storage?.getPublicUrl(item.storageKey);
+	// Guarded call: partial Storage doubles in upstream tests (and older
+	// third-party impls) may not implement getPublicUrl.
+	const publicUrl =
+		typeof storage?.getPublicUrl === "function" ? storage.getPublicUrl(item.storageKey) : undefined;
 	return {
 		...item,
 		url:
