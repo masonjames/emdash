@@ -107,9 +107,15 @@ jobs:
             echo
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } > /tmp/mj-issue.md
+          {
+            echo "## ⚠️ Merge conflict with upstream"
+            echo
+            cat /tmp/mj-issue.md
+          } >> "$GITHUB_STEP_SUMMARY"
           gh issue create \
             --title "mj-sync-upstream: merge conflict with upstream ($(date -u +%F))" \
-            --body-file /tmp/mj-issue.md
+            --body-file /tmp/mj-issue.md \
+            || echo "::warning::could not create issue (Issues disabled?) — details are in the step summary"
           exit 1
 
       - name: Detect whether anything changed
@@ -136,6 +142,17 @@ jobs:
       - name: Build core + admin (the packages the site vendors first)
         if: steps.changed.outputs.changed == 'true'
         run: pnpm --filter emdash --filter @emdash-cms/admin build
+
+      # Admin tests run in vitest browser mode (Playwright chromium) — same
+      # cache + conditional install pattern as upstream ci.yml.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.changed.outputs.changed == 'true'
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: pnpm exec playwright install --with-deps chromium
+        if: steps.changed.outputs.changed == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
 
       - name: Run the PR #1366 media test suites (the carried feature)
         if: steps.changed.outputs.changed == 'true'
