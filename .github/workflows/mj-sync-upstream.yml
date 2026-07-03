@@ -26,7 +26,12 @@ name: mj-sync-upstream
 on:
   schedule:
     - cron: "17 9 * * 1" # Mondays 09:17 UTC
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Run install/build/tests even when already up to date"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -121,7 +126,8 @@ jobs:
       - name: Detect whether anything changed
         id: changed
         run: |
-          if [ "${{ steps.merge.outputs.before }}" = "${{ steps.merge.outputs.after }}" ]; then
+          if [ "${{ steps.merge.outputs.before }}" = "${{ steps.merge.outputs.after }}" ] \
+             && [ "${{ inputs.force_build }}" != "true" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
