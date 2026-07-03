@@ -145,9 +145,12 @@ jobs:
         if: steps.changed.outputs.changed == 'true'
         run: pnpm install --frozen-lockfile || pnpm install
 
-      - name: Build core + admin (the packages the site vendors first)
+      # `...` suffixes pull in each package's workspace dependency graph —
+      # admin's browser tests import built dist/ of its deps (upstream's
+      # test-browser job uses the same filter shape).
+      - name: Build core + admin with their workspace deps
         if: steps.changed.outputs.changed == 'true'
-        run: pnpm --filter emdash --filter @emdash-cms/admin build
+        run: pnpm run --filter emdash... --filter @emdash-cms/admin... build
 
       # Admin tests run in vitest browser mode (Playwright chromium) — same
       # cache + conditional install pattern as upstream ci.yml.
