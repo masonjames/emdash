@@ -160,10 +160,13 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
         if: steps.changed.outputs.changed == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
 
-      - name: Run the PR #1366 media test suites (the carried feature)
+      # Full admin suite, invoked exactly like upstream ci.yml — targeting the
+      # two #1366 files via `pnpm exec vitest run` breaks browser-mode runner
+      # resolution ("Vitest failed to find the runner"), so run the suite the
+      # way upstream proves it. Covers the carried media features and more.
+      - name: Run the admin test suite (covers the carried PR #1366 media features)
         if: steps.changed.outputs.changed == 'true'
-        working-directory: packages/admin
-        run: pnpm exec vitest run tests/components/MediaLibrary.test.tsx tests/components/MediaPickerModal.test.tsx
+        run: pnpm run --filter @emdash-cms/admin test
 
       - name: Push merged mj/prod
         if: steps.changed.outputs.changed == 'true'
