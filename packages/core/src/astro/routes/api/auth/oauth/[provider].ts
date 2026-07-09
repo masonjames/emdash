@@ -11,6 +11,7 @@ export const prerender = false;
 import { createAuthorizationUrl, type OAuthConsumerConfig } from "@emdash-cms/auth";
 
 import { getPublicOrigin } from "#api/public-url.js";
+import { getOAuthConfig, resolveOAuthProviderEnv } from "#auth/oauth-provider-env.js";
 import { createOAuthStateStore } from "#auth/oauth-state-store.js";
 
 type ProviderName = "github" | "google";
@@ -19,52 +20,6 @@ const VALID_PROVIDERS = new Set<string>(["github", "google"]);
 
 function isValidProvider(provider: string): provider is ProviderName {
 	return VALID_PROVIDERS.has(provider);
-}
-
-/** Safely extract a string value from an env-like record */
-function envString(env: Record<string, unknown>, ...keys: string[]): string | undefined {
-	for (const key of keys) {
-		const val = env[key];
-		if (typeof val === "string" && val) return val;
-	}
-	return undefined;
-}
-
-/**
- * Get OAuth config from environment variables
- */
-function getOAuthConfig(env: Record<string, unknown>): OAuthConsumerConfig["providers"] {
-	const providers: OAuthConsumerConfig["providers"] = {};
-
-	// GitHub
-	const githubClientId = envString(env, "EMDASH_OAUTH_GITHUB_CLIENT_ID", "GITHUB_CLIENT_ID");
-	const githubClientSecret = envString(
-		env,
-		"EMDASH_OAUTH_GITHUB_CLIENT_SECRET",
-		"GITHUB_CLIENT_SECRET",
-	);
-	if (githubClientId && githubClientSecret) {
-		providers.github = {
-			clientId: githubClientId,
-			clientSecret: githubClientSecret,
-		};
-	}
-
-	// Google
-	const googleClientId = envString(env, "EMDASH_OAUTH_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID");
-	const googleClientSecret = envString(
-		env,
-		"EMDASH_OAUTH_GOOGLE_CLIENT_SECRET",
-		"GOOGLE_CLIENT_SECRET",
-	);
-	if (googleClientId && googleClientSecret) {
-		providers.google = {
-			clientId: googleClientId,
-			clientSecret: googleClientSecret,
-		};
-	}
-
-	return providers;
 }
 
 export const GET: APIRoute = async ({ params, request, locals, redirect }) => {
@@ -94,11 +49,13 @@ export const GET: APIRoute = async ({ params, request, locals, redirect }) => {
 		const url = new URL(request.url);
 
 		// Get OAuth providers from environment
-		// Access via locals.runtime for Cloudflare, or import.meta.env for Node
 		// eslint-disable-next-line typescript/no-unsafe-type-assertion -- locals.runtime is injected by the Cloudflare adapter at runtime; not declared on App.Locals since the adapter is optional
 		const runtimeLocals = locals as unknown as { runtime?: { env?: Record<string, unknown> } };
 		// eslint-disable-next-line typescript/no-unsafe-type-assertion -- import.meta.env is typed as ImportMetaEnv but we need Record<string, unknown> for getOAuthConfig
-		const env = runtimeLocals.runtime?.env ?? (import.meta.env as Record<string, unknown>);
+		const env = resolveOAuthProviderEnv(
+			runtimeLocals.runtime?.env,
+			import.meta.env as Record<string, unknown>,
+		);
 		const providers = getOAuthConfig(env);
 
 		if (!providers[provider]) {
