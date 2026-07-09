@@ -16,6 +16,7 @@ import { isParseError, parseOptionalBody } from "#api/parse.js";
 import { mediaConfirmBody } from "#api/schemas.js";
 import { enrichImageMetadata } from "#media/enrich.js";
 import type { MediaItem } from "#types";
+
 import type { Storage } from "../../../../../storage/types.js";
 
 export const prerender = false;

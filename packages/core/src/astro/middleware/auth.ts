@@ -34,7 +34,7 @@ import { getAuthMode, type ExternalAuthMode } from "../../auth/mode.js";
 import type { ExternalAuthConfig } from "../../auth/types.js";
 import { resolveSessionUser } from "../session-user.js";
 import type { EmDashHandlers } from "../types.js";
-import { buildEmDashCsp } from "./csp.js";
+import { buildEmDashCsp, getConfiguredStorageEndpoint } from "./csp.js";
 
 declare global {
 	namespace App {
@@ -308,7 +308,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 				"Content-Security-Policy",
 				buildEmDashCsp(
 					context.locals.emdash?.config.experimental?.registry,
-					context.locals.emdash?.storage?.getClientUploadOrigin?.(),
+					getConfiguredStorageEndpoint(context.locals.emdash?.config.storage),
 				),
 			);
 		}
@@ -322,9 +322,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		response.headers.set(
 			"Content-Security-Policy",
 			buildEmDashCsp(
-					context.locals.emdash?.config.experimental?.registry,
-					context.locals.emdash?.storage?.getClientUploadOrigin?.(),
-				),
+				context.locals.emdash?.config.experimental?.registry,
+				getConfiguredStorageEndpoint(context.locals.emdash?.config.storage),
+			),
 		);
 	}
 

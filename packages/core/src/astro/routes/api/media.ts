@@ -21,7 +21,6 @@ import { matchesMimeAllowlist, normalizeMime } from "#media/mime.js";
 import { computeContentHash } from "#utils/hash.js";
 
 import type { Storage } from "../../../storage/types.js";
-
 import type { MediaItem } from "../../types.js";
 
 export const prerender = false;

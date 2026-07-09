@@ -77,7 +77,6 @@ import {
 	fetchTranslations,
 	fetchMediaList,
 	uploadMedia,
-	deleteMedia,
 	fetchCollections,
 	fetchCollection,
 	createCollection,
@@ -120,6 +119,7 @@ import {
 	bulkCommentAction,
 	type CommentStatus,
 } from "./lib/api/comments";
+import { runBulkAction } from "./lib/bulk";
 import { usePluginPage } from "./lib/plugin-context";
 import { getPluginBlocks } from "./lib/pluginBlocks";
 import { sanitizeRedirectUrl } from "./lib/url";
@@ -339,7 +339,9 @@ function ContentListPage() {
 	React.useEffect(() => {
 		setSort({ field: defaultListDateField, direction: "desc" });
 		setDateFilter((current) =>
-			current.from || current.to ? current : { ...EMPTY_DATE_FILTER, field: defaultFilterDateField },
+			current.from || current.to
+				? current
+				: { ...EMPTY_DATE_FILTER, field: defaultFilterDateField },
 		);
 	}, [collection, defaultFilterDateField, defaultListDateField]);
 
@@ -459,6 +461,80 @@ function ContentListPage() {
 		},
 	});
 
+	// Bulk actions run the existing per-entry endpoints through a
+	// concurrency-limited queue (runBulkAction) — selection persists across
+	// pagination, so an unbounded fan-out could fire hundreds of parallel
+	// requests. Per-id failures are collected (not thrown) and returned to
+	// ContentList, which keeps the failed rows selected for a retry; the
+	// toasts surface the failure count and the list is refetched either way.
+	const bulkPublishMutation = useMutation({
+		mutationFn: async (ids: string[]) => {
+			const { failedIds } = await runBulkAction(ids, (id) =>
+				publishContent(collection, id, { locale: activeLocale }),
+			);
+			return { total: ids.length, failedIds };
+		},
+		onSuccess: ({ total, failedIds }) => {
+			if (failedIds.length === 0) {
+				toastManager.add({ title: t`Published ${total} items`, type: "success" });
+			} else {
+				toastManager.add({
+					title: t`Failed to publish`,
+					description: t`${failedIds.length} of ${total} could not be published`,
+					type: "error",
+				});
+			}
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
+		},
+	});
+
+	const bulkUnpublishMutation = useMutation({
+		mutationFn: async (ids: string[]) => {
+			const { failedIds } = await runBulkAction(ids, (id) =>
+				unpublishContent(collection, id, { locale: activeLocale }),
+			);
+			return { total: ids.length, failedIds };
+		},
+		onSuccess: ({ total, failedIds }) => {
+			if (failedIds.length === 0) {
+				toastManager.add({ title: t`Moved ${total} items to draft`, type: "success" });
+			} else {
+				toastManager.add({
+					title: t`Failed to update`,
+					description: t`${failedIds.length} of ${total} could not be updated`,
+					type: "error",
+				});
+			}
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
+		},
+	});
+
+	const bulkDeleteMutation = useMutation({
+		mutationFn: async (ids: string[]) => {
+			const { failedIds } = await runBulkAction(ids, (id) => deleteContent(collection, id));
+			return { total: ids.length, failedIds };
+		},
+		onSuccess: ({ total, failedIds }) => {
+			if (failedIds.length === 0) {
+				toastManager.add({ title: t`Moved ${total} items to trash`, type: "success" });
+			} else {
+				toastManager.add({
+					title: t`Failed to delete`,
+					description: t`${failedIds.length} of ${total} could not be deleted`,
+					type: "error",
+				});
+			}
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
+			void queryClient.invalidateQueries({ queryKey: ["content", collection, "trash"] });
+		},
+	});
+
 	const items = React.useMemo(() => {
 		return data?.pages.flatMap((page) => page.items) || [];
 	}, [data]);
@@ -528,6 +604,9 @@ function ContentListPage() {
 			onAuthorFilterChange={setAuthorFilter}
 			dateFilter={dateFilter}
 			onDateFilterChange={setDateFilter}
+			onBulkPublish={(ids) => bulkPublishMutation.mutateAsync(ids).then((r) => r.failedIds)}
+			onBulkUnpublish={(ids) => bulkUnpublishMutation.mutateAsync(ids).then((r) => r.failedIds)}
+			onBulkDelete={(ids) => bulkDeleteMutation.mutateAsync(ids).then((r) => r.failedIds)}
 		/>
 	);
 }
@@ -1181,10 +1260,6 @@ function MediaPage() {
 
 	const uploadMutation = useMutation({
 		mutationFn: (file: File) => uploadMedia(file),
-	});
-
-	const deleteMutation = useMutation({
-		mutationFn: (id: string) => deleteMedia(id),
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: ["media"] });
 		},
@@ -1204,12 +1279,7 @@ function MediaPage() {
 			isLoading={isLoading || isFetchingNextPage}
 			hasMore={!!hasNextPage}
 			onLoadMore={() => void fetchNextPage()}
-			onUpload={async (file) => {
-				await uploadMutation.mutateAsync(file);
-				await queryClient.invalidateQueries({ queryKey: ["media"] });
-				await queryClient.refetchQueries({ queryKey: ["media"], type: "active" });
-			}}
-			onDelete={(id) => deleteMutation.mutate(id)}
+			onUpload={(file) => uploadMutation.mutateAsync(file).then(() => undefined)}
 			onLocalSearchChange={setSearch}
 			onLocalMimeFilterChange={setMimeFilter}
 		/>
