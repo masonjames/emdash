@@ -6,17 +6,19 @@ on:
     types: [opened, synchronize]
   merge_group:
 
-permissions:
-  actions: write
-  checks: read
-  contents: write
-  issues: write
-  pull-requests: write
-  statuses: write
+permissions: {}
 
 jobs:
   CLAssistant:
+    if: github.repository == 'emdash-cms/emdash'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+      statuses: write
     steps:
       - name: "CLA Assistant"
         if: (github.event.issue.pull_request && (github.event.comment.body == 'recheck' || startsWith(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA'))) || github.event_name == 'pull_request_target'
@@ -32,8 +34,16 @@ jobs:
 
   label:
     needs: CLAssistant
-    if: always() && (github.event_name == 'pull_request_target' || github.event.issue.pull_request)
+    if: >-
+      github.repository == 'emdash-cms/emdash' &&
+      always() &&
+      (github.event_name == 'pull_request_target' || github.event.issue.pull_request)
     runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: read
+      issues: write
+      pull-requests: read
     steps:
       - name: Label CLA status
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
