@@ -1,217 +1,439 @@
-# mj-sync-upstream — keep the masonjames/emdash fork current with upstream
-# while carrying PR #1366 (+ local patches) on mj/prod.
-#
-# Branching model (masonjames.com docs/prd/emdash-production/prd.md AD-2):
-#   main    = pristine fast-forward mirror of emdash-cms/emdash main
-#   mj/prod = main + carried PR branches + local patches (the only branch
-#             the site's vendor-emdash.mjs builds from)
-#
-# This workflow lives on mj/prod, which is the repo's DEFAULT branch so the
-# cron trigger works (GitHub runs scheduled workflows from the default branch
-# only). It must never be added to main — main mirrors upstream exactly.
-#
-# On success it pushes the refreshed mirror + merged mj/prod. On merge
-# conflict or build/test failure it opens an issue (and sends an ntfy alert
-# when NTFY_URL/NTFY_TOKEN secrets are configured) and leaves the branches
-# untouched. The site repo picks up new mj/prod commits via
-# scripts/mj/sync-emdash.sh (vendor tarball refresh) — that half stays
-# local-first by design.
-#
-# Note: GitHub auto-disables cron workflows after ~60 days without repo
-# activity; successful sync pushes count as activity, and a manual
-# workflow_dispatch re-enables it.
-
-name: mj-sync-upstream
+# Prepare upstream changes in a read-only job, then independently reproduce the
+# candidate tree in a narrowly scoped publication job. No code from the merged
+# candidate is executed in a job that receives a write credential.
+name: Mason upstream sync PR
 
 on:
   schedule:
-    - cron: "17 9 * * 1" # Mondays 09:17 UTC
+    # GitHub cron is UTC. Running both offsets and checking America/New_York
+    # below keeps the job at 03:17 through daylight-saving transitions.
+    - cron: "17 7 * * 0"
+    - cron: "17 8 * * 0"
   workflow_dispatch:
     inputs:
-      force_build:
-        description: "Run install/build/tests even when already up to date"
+      recheck:
+        description: "Repeat the read-only comparison even when upstream is already included"
         type: boolean
         default: false
 
-permissions:
-  contents: write
-  issues: write
+permissions: {}
 
 concurrency:
-  group: mj-sync-upstream
+  group: mj-sync-upstream-pr
   cancel-in-progress: false
 
 jobs:
-  sync:
-    # Never run outside the personal fork (e.g. if this file ever reaches
-    # another fork or, unthinkably, upstream).
+  prepare:
+    name: Prepare candidate tree without write credentials
     if: github.repository == 'masonjames/emdash'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      branch: ${{ steps.prepare.outputs.branch }}
+      candidate_tree: ${{ steps.prepare.outputs.candidate_tree }}
+      detail_b64: ${{ steps.prepare.outputs.detail_b64 }}
+      production_sha: ${{ steps.anchor.outputs.production_sha }}
+      status: ${{ steps.prepare.outputs.status }}
+      upstream_lag: ${{ steps.prepare.outputs.upstream_lag }}
+      upstream_sha: ${{ steps.prepare.outputs.upstream_sha || steps.anchor.outputs.production_sha }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Enforce the Sunday maintenance window
+        id: window
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_REF" != "refs/heads/mj/prod" ]; then
+            echo "This maintenance workflow may run only from refs/heads/mj/prod." >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          local_day=$(TZ=America/New_York date +%u)
+          local_hour=$(TZ=America/New_York date +%H)
+          if [ "$local_day" = "7" ] && [ "$local_hour" = "03" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "DST companion schedule is outside Sunday 03:00 America/New_York; no-op." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Record the trusted workflow revision
+        if: steps.window.outputs.run == 'true'
+        id: anchor
+        env:
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          if ! printf '%s' "$EVENT_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "The workflow event did not provide a full trusted commit SHA." >&2
+            exit 1
+          fi
+          echo "production_sha=$EVENT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact production source
+        if: steps.window.outputs.run == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: mj/prod
+          ref: ${{ steps.anchor.outputs.production_sha }}
           fetch-depth: 0
-          # Don't write credentials into .git/config — pushes use MJ_SYNC_TOKEN
-          # injected per-step, so it is never on disk while pnpm install runs
-          # upstream postinstall scripts.
           persist-credentials: false
 
-      - name: Configure git identity
-        run: |
-          git config user.name "mj-sync-upstream[bot]"
-          git config user.email "masonjames@users.noreply.github.com"
-
-      - name: Fetch upstream
-        run: |
-          git remote add upstream https://github.com/emdash-cms/emdash.git
-          git fetch upstream main
-
-      # GITHUB_TOKEN cannot push .github/workflows/ changes ("refusing to
-      # allow a GitHub App to create or update workflow ... without
-      # `workflows` permission"), and upstream touches its workflows all the
-      # time — so pushes use MJ_SYNC_TOKEN: a token with repo+workflow scope.
-      # Currently the operator's gh CLI token; replacing it with a
-      # fine-grained PAT (Contents + Workflows RW on masonjames/emdash only)
-      # is the recommended hygiene upgrade.
-      - name: Mirror upstream main -> fork main (ff-only by construction)
+      - name: Compute the candidate tree using Git only
+        if: steps.window.outputs.run == 'true'
+        id: prepare
         env:
-          GH_PUSH_TOKEN: ${{ secrets.MJ_SYNC_TOKEN || github.token }}
-        run: git push "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${{ github.repository }}.git" upstream/main:refs/heads/main
-
-      - name: Merge upstream/main into mj/prod
-        id: merge
+          EXPECTED_PRODUCTION_SHA: ${{ steps.anchor.outputs.production_sha }}
+          RECHECK: ${{ inputs.recheck || false }}
         run: |
-          echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
-          if git merge --no-edit upstream/main; then
-            echo "conflict=false" >> "$GITHUB_OUTPUT"
-          else
-            git diff --name-only --diff-filter=U | head -50 > /tmp/mj-conflicts.txt
-            git merge --abort
-            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          set -uo pipefail
+
+          write_failure() {
+            local stage="$1"
+            local detail="$2"
+            {
+              echo "status=$stage"
+              echo "detail_b64=$(printf '%s' "$detail" | base64 -w 0)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if ! production_sha=$(git rev-parse HEAD); then
+            write_failure preparation "Unable to resolve the checked-out production SHA."
           fi
-          echo "after=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Fail on merge conflict (issue carries the details)
-        if: steps.merge.outputs.conflict == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          {
-            echo "Weekly upstream sync hit a merge conflict merging upstream/main (${{ steps.merge.outputs.upstream }}) into mj/prod."
-            echo
-            echo "Conflicted files:"
-            echo '```'
-            cat /tmp/mj-conflicts.txt
-            echo '```'
-            echo
-            echo "Resolve locally per masonjames.com docs/prd/emdash-production/prd.md AD-2:"
-            echo '`git fetch origin && git checkout mj/prod && git merge origin/main` (or upstream directly), resolve, build, test, push.'
-            echo
-            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } > /tmp/mj-issue.md
-          {
-            echo "## ⚠️ Merge conflict with upstream"
-            echo
-            cat /tmp/mj-issue.md
-          } >> "$GITHUB_STEP_SUMMARY"
-          gh issue create \
-            --title "mj-sync-upstream: merge conflict with upstream ($(date -u +%F))" \
-            --body-file /tmp/mj-issue.md \
-            || echo "::warning::could not create issue (Issues disabled?) — details are in the step summary"
-          exit 1
-
-      - name: Detect whether anything changed
-        id: changed
-        run: |
-          if [ "${{ steps.merge.outputs.before }}" = "${{ steps.merge.outputs.after }}" ] \
-             && [ "${{ inputs.force_build }}" != "true" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          if [ "$production_sha" != "$EXPECTED_PRODUCTION_SHA" ]; then
+            write_failure preparation "Expected checkout $EXPECTED_PRODUCTION_SHA, but Git resolved $production_sha."
           fi
-
-      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-        if: steps.changed.outputs.changed == 'true'
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        if: steps.changed.outputs.changed == 'true'
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install
-        if: steps.changed.outputs.changed == 'true'
-        run: pnpm install --frozen-lockfile || pnpm install
-
-      # `...` suffixes pull in each package's workspace dependency graph —
-      # admin's browser tests import built dist/ of its deps (upstream's
-      # test-browser job uses the same filter shape).
-      - name: Build core + admin with their workspace deps
-        if: steps.changed.outputs.changed == 'true'
-        run: pnpm run --filter emdash... --filter @emdash-cms/admin... build
-
-      # Admin tests run in vitest browser mode (Playwright chromium) — same
-      # cache + conditional install pattern as upstream ci.yml.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: steps.changed.outputs.changed == 'true'
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('pnpm-lock.yaml') }}
-      - run: pnpm exec playwright install --with-deps chromium
-        if: steps.changed.outputs.changed == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
-
-      # Full admin suite, invoked exactly like upstream ci.yml — targeting the
-      # two #1366 files via `pnpm exec vitest run` breaks browser-mode runner
-      # resolution ("Vitest failed to find the runner"), so run the suite the
-      # way upstream proves it. Covers the carried media features and more.
-      - name: Run the admin test suite (covers the carried PR #1366 media features)
-        if: steps.changed.outputs.changed == 'true'
-        run: pnpm run --filter @emdash-cms/admin test
-
-      - name: Push merged mj/prod
-        if: steps.changed.outputs.changed == 'true'
-        env:
-          GH_PUSH_TOKEN: ${{ secrets.MJ_SYNC_TOKEN || github.token }}
-        run: git push "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${{ github.repository }}.git" mj/prod
-
-      - name: Carried-patch status report
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          PR_STATE=$(gh api repos/emdash-cms/emdash/pulls/1366 --jq '{state: .state, merged: .merged}' 2>/dev/null || echo '{"state":"unknown"}')
-          CARRIED=$(git log --oneline --no-merges upstream/main..mj/prod | wc -l | tr -d ' ')
           {
-            echo "## mj-sync-upstream"
-            echo
-            if [ "${{ steps.changed.outputs.changed }}" = "true" ]; then
-              echo "- Merged upstream/main \`${{ steps.merge.outputs.upstream }}\` into mj/prod: \`${{ steps.merge.outputs.before }}\` → \`$(git rev-parse HEAD)\`"
-              echo "- Build + #1366 media tests: green; mj/prod pushed"
-              echo "- **Next (local):** run \`scripts/mj/sync-emdash.sh\` in masonjames.com to re-vendor, gate, and stage a deploy branch"
+            echo "production_sha=$production_sha"
+            echo "upstream_sha=$production_sha"
+            echo "upstream_lag=0"
+            echo "candidate_tree="
+            echo "branch="
+            echo "detail_b64="
+          } >> "$GITHUB_OUTPUT"
+
+          git remote remove upstream >/dev/null 2>&1 || true
+          if ! git remote add upstream https://github.com/emdash-cms/emdash.git; then
+            write_failure preparation "Could not configure the read-only upstream remote."
+          fi
+          if ! git fetch --no-tags --prune upstream main; then
+            write_failure preparation "Could not fetch emdash-cms/emdash:main."
+          fi
+          if ! upstream_sha=$(git rev-parse upstream/main); then
+            write_failure preparation "Fetched upstream/main could not be resolved to a commit."
+          fi
+          upstream_short=${upstream_sha:0:12}
+          branch="automation/mj-upstream-${upstream_short}"
+          if ! upstream_lag=$(git rev-list --count HEAD..upstream/main); then
+            write_failure preparation "Could not calculate the upstream commit lag."
+          fi
+          {
+            echo "upstream_sha=$upstream_sha"
+            echo "upstream_lag=$upstream_lag"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            candidate_tree=$(git rev-parse 'HEAD^{tree}')
+            {
+              echo "status=noop"
+              echo "candidate_tree=$candidate_tree"
+            } >> "$GITHUB_OUTPUT"
+            if [ "$RECHECK" = "true" ]; then
+              echo "Recheck complete: mj/prod already contains upstream $upstream_sha." >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "- Already up to date with upstream/main (\`${{ steps.merge.outputs.upstream }}\`) — nothing to do"
+              echo "mj/prod already contains upstream $upstream_sha; no PR created." >> "$GITHUB_STEP_SUMMARY"
             fi
-            echo "- Carried non-upstream commits on mj/prod: **$CARRIED**"
-            echo "- Upstream PR #1366: \`$PR_STATE\`"
-            if echo "$PR_STATE" | grep -q '"merged":true'; then
-              echo
-              echo "> **PR #1366 has merged upstream.** The next merge from upstream should deduplicate the carried commits automatically; consider retiring the remaining local patches."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
-      - name: Notify failure (ntfy, optional)
-        if: failure()
+          git config user.name "mj-upstream-sync[bot]"
+          git config user.email "masonjames@users.noreply.github.com"
+          if ! git switch -c "$branch"; then
+            write_failure preparation "Could not create the isolated candidate branch."
+          fi
+          if ! git merge --no-ff --no-edit upstream/main >/tmp/mj-prepare-merge.log 2>&1; then
+            conflict_detail=$(
+              {
+                echo "Conflicted files:"
+                git diff --name-only --diff-filter=U | head -100
+              } | sed -n '1,110p'
+            )
+            git merge --abort >/dev/null 2>&1 || true
+            write_failure conflict "$conflict_detail"
+          fi
+          if ! candidate_tree=$(git rev-parse 'HEAD^{tree}'); then
+            write_failure preparation "The merged candidate tree could not be resolved."
+          fi
+          {
+            echo "candidate_tree=$candidate_tree"
+            echo "status=ready"
+          } >> "$GITHUB_OUTPUT"
+          echo "Read-only preparation produced candidate tree $candidate_tree." >> "$GITHUB_STEP_SUMMARY"
+
+  report-preparation-failure:
+    name: Report preparation failure from trusted production source
+    needs: prepare
+    if: >-
+      always() &&
+      needs.prepare.outputs.production_sha != '' &&
+      (needs.prepare.result == 'failure' ||
+       needs.prepare.outputs.status == 'conflict' ||
+       needs.prepare.outputs.status == 'preparation')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout the recorded production commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.prepare.outputs.production_sha }}
+          persist-credentials: false
+
+      - name: Decode sanitized preparation evidence
         env:
-          NTFY_URL: ${{ secrets.NTFY_URL }}
-          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          DETAIL_B64: ${{ needs.prepare.outputs.detail_b64 }}
+        run: printf '%s' "$DETAIL_B64" | base64 --decode > /tmp/mj-failure-details.txt
+
+      - name: Create or update the assigned issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          MJ_DETAIL_FILE: /tmp/mj-failure-details.txt
+          MJ_FAILURE_STAGE: ${{ needs.prepare.outputs.status || 'preparation' }}
+          MJ_PRODUCTION_SHA: ${{ needs.prepare.outputs.production_sha }}
+          MJ_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MJ_UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+        run: node scripts/mj/report-upstream-failure.mjs
+
+      - name: Keep the maintenance run red
+        run: exit 1
+
+  publish:
+    name: Reproduce and publish the candidate without executing it
+    needs: prepare
+    if: needs.prepare.outputs.status == 'ready'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      detail_b64: ${{ steps.publish.outputs.detail_b64 || steps.initialize.outputs.detail_b64 }}
+      pr_url: ${{ steps.publish.outputs.pr_url }}
+      status: ${{ steps.publish.outputs.status || steps.initialize.outputs.status }}
+    steps:
+      - name: Initialize fail-closed publication state
+        id: initialize
         run: |
-          [ -z "$NTFY_URL" ] && { echo "ntfy not configured; skipping"; exit 0; }
-          curl -fsS -m 15 \
-            -H "Authorization: Bearer $NTFY_TOKEN" \
-            -H "Title: emdash fork sync failed" \
-            -H "Priority: high" \
-            -H "Tags: warning,emdash" \
-            -d "mj-sync-upstream failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            "$NTFY_URL" || true
+          {
+            echo "status=failure"
+            echo "detail_b64=$(printf '%s' 'Publication stopped before a detailed failure was captured.' | base64 -w 0)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the recorded production commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.prepare.outputs.production_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rebuild, compare, and publish the candidate
+        id: publish
+        env:
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          EXPECTED_BASE_SHA: ${{ needs.prepare.outputs.production_sha }}
+          EXPECTED_TREE: ${{ needs.prepare.outputs.candidate_tree }}
+          EXPECTED_UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.MJ_SYNC_TOKEN }}
+          SYNC_TOKEN: ${{ secrets.MJ_SYNC_TOKEN }}
+          UPSTREAM_LAG: ${{ needs.prepare.outputs.upstream_lag }}
+        run: |
+          set -uo pipefail
+
+          fail_publication() {
+            local detail="$1"
+            {
+              echo "status=failure"
+              echo "detail_b64=$(printf '%s' "$detail" | base64 -w 0)"
+              echo "pr_url="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if [ -z "$SYNC_TOKEN" ]; then
+            fail_publication "MJ_SYNC_TOKEN is missing; no candidate branch or PR was published."
+          fi
+          if ! current_base=$(git ls-remote origin refs/heads/mj/prod | awk '{print $1}'); then
+            fail_publication "Could not resolve the current remote mj/prod tip."
+          fi
+          if [ "$current_base" != "$EXPECTED_BASE_SHA" ]; then
+            fail_publication "Expected mj/prod at $EXPECTED_BASE_SHA, but it moved to $current_base."
+          fi
+
+          git remote remove upstream >/dev/null 2>&1 || true
+          if ! git remote add upstream https://github.com/emdash-cms/emdash.git; then
+            fail_publication "Could not configure the upstream remote during reproduction."
+          fi
+          if ! git fetch --no-tags --prune upstream main; then
+            fail_publication "Could not refetch emdash-cms/emdash:main during reproduction."
+          fi
+          if ! actual_upstream_sha=$(git rev-parse upstream/main); then
+            fail_publication "Refetched upstream/main could not be resolved."
+          fi
+          if [ "$actual_upstream_sha" != "$EXPECTED_UPSTREAM_SHA" ]; then
+            fail_publication "Upstream moved from $EXPECTED_UPSTREAM_SHA to $actual_upstream_sha during preparation."
+          fi
+
+          git config user.name "mj-upstream-sync[bot]"
+          git config user.email "masonjames@users.noreply.github.com"
+          if ! git switch -c "$BRANCH"; then
+            fail_publication "Could not recreate candidate branch $BRANCH."
+          fi
+          if ! git merge --no-ff --no-edit upstream/main >/tmp/mj-publish-merge.log 2>&1; then
+            git merge --abort >/dev/null 2>&1 || true
+            fail_publication "The independent publication merge conflicted after read-only preparation had succeeded."
+          fi
+          if ! actual_tree=$(git rev-parse 'HEAD^{tree}'); then
+            fail_publication "The independently merged candidate tree could not be resolved."
+          fi
+          if [ "$actual_tree" != "$EXPECTED_TREE" ]; then
+            fail_publication "Candidate tree mismatch: prepared $EXPECTED_TREE, reproduced $actual_tree."
+          fi
+
+          if ! remote_sha=$(git ls-remote origin "refs/heads/$BRANCH" | awk '{print $1}'); then
+            fail_publication "Could not inspect candidate branch $BRANCH."
+          fi
+          if [ -n "$remote_sha" ]; then
+            if ! git fetch --no-tags origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"; then
+              fail_publication "Could not fetch existing candidate branch $BRANCH."
+            fi
+            if ! remote_tree=$(git rev-parse "$remote_sha^{tree}"); then
+              fail_publication "Existing candidate branch $BRANCH has an unreadable tree."
+            fi
+            if [ "$remote_tree" != "$EXPECTED_TREE" ]; then
+              fail_publication "Existing candidate branch $BRANCH differs from prepared tree $EXPECTED_TREE; refusing to rewrite it."
+            fi
+          else
+            if ! git push "https://x-access-token:${SYNC_TOKEN}@github.com/${GH_REPOSITORY}.git" \
+              "HEAD:refs/heads/$BRANCH"; then
+              fail_publication "Candidate branch publication failed."
+            fi
+          fi
+
+          upstream_short=${EXPECTED_UPSTREAM_SHA:0:12}
+          title="chore: sync upstream through ${upstream_short}"
+          {
+            echo "## What does this PR do?"
+            echo
+            echo "Synchronizes Mason's production branch with upstream through \`${EXPECTED_UPSTREAM_SHA}\` while retaining the carried patch ledger and human review gate."
+            echo
+            echo "- Production base: \`${EXPECTED_BASE_SHA}\`"
+            echo "- Prepared and independently reproduced tree: \`${EXPECTED_TREE}\`"
+            echo "- Upstream commits pending at preparation: ${UPSTREAM_LAG}"
+            echo "- Patch ledger: \`docs/operations/mj-patch-ledger.json\`"
+            echo
+            echo "Update \`reviewed_production_sha\` to the PR base and \`reviewed_upstream_sha\` to the fetched upstream tip after reviewing the complete diff. The production checks intentionally fail while either value is stale."
+            echo
+            echo "## Type of change"
+            echo
+            echo "- [x] Chore (dependencies, CI, tooling)"
+            echo
+            echo "## Checklist"
+            echo
+            echo "- [x] I have read CONTRIBUTING.md"
+            echo "- [ ] Both Mason production checks pass"
+            echo "- [ ] The patch ledger reflects any upstreamed, rebased, or removed patch"
+            echo "- [ ] The complete upstream and carried-patch diff has been reviewed"
+            echo "- [ ] Merge manually; auto-merge remains disabled"
+            echo
+            echo "## AI-generated code disclosure"
+            echo
+            echo "- [ ] This upstream synchronization contains AI-generated code"
+            echo
+            echo "## Screenshots / test output"
+            echo
+            echo "See the required Mason production checks on this pull request. Site vendoring and deployment are separate and disabled by default."
+          } > /tmp/mj-pr-body.md
+
+          if ! gh label create automated-maintenance --color 1d76db --description "Created by an automated maintenance workflow" --force; then
+            fail_publication "Could not create or refresh the automated-maintenance label."
+          fi
+          if ! gh label create emdash-upstream-sync --color 5319e7 --description "Mason fork upstream synchronization" --force; then
+            fail_publication "Could not create or refresh the emdash-upstream-sync label."
+          fi
+          if ! pr_number=$(gh pr list --base mj/prod --head "$BRANCH" --state open --json number --jq '.[0].number // empty'); then
+            fail_publication "Could not query existing upstream synchronization PRs."
+          fi
+          if [ -z "$pr_number" ]; then
+            if ! pr_url=$(gh pr create \
+              --base mj/prod \
+              --head "$BRANCH" \
+              --title "$title" \
+              --body-file /tmp/mj-pr-body.md \
+              --assignee masonjames \
+              --label automated-maintenance \
+              --label emdash-upstream-sync); then
+              fail_publication "Candidate branch exists, but pull-request creation failed."
+            fi
+          else
+            if ! gh pr edit "$pr_number" \
+              --title "$title" \
+              --body-file /tmp/mj-pr-body.md \
+              --add-assignee masonjames \
+              --add-label automated-maintenance,emdash-upstream-sync; then
+              fail_publication "Could not refresh upstream synchronization PR #$pr_number."
+            fi
+            if ! pr_url=$(gh pr view "$pr_number" --json url --jq .url); then
+              fail_publication "Could not resolve the URL for upstream synchronization PR #$pr_number."
+            fi
+          fi
+          {
+            echo "status=success"
+            echo "detail_b64="
+            echo "pr_url=$pr_url"
+          } >> "$GITHUB_OUTPUT"
+          echo "Published independently reproduced candidate tree $EXPECTED_TREE: $pr_url" >> "$GITHUB_STEP_SUMMARY"
+
+  report-publication-failure:
+    name: Report publication failure from trusted production source
+    needs:
+      - prepare
+      - publish
+    if: always() && needs.publish.outputs.status == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout the recorded production commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.prepare.outputs.production_sha }}
+          persist-credentials: false
+
+      - name: Decode sanitized publication evidence
+        env:
+          DETAIL_B64: ${{ needs.publish.outputs.detail_b64 }}
+        run: printf '%s' "$DETAIL_B64" | base64 --decode > /tmp/mj-failure-details.txt
+
+      - name: Create or update the assigned issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          MJ_DETAIL_FILE: /tmp/mj-failure-details.txt
+          MJ_FAILURE_STAGE: publication
+          MJ_PRODUCTION_SHA: ${{ needs.prepare.outputs.production_sha }}
+          MJ_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MJ_UPSTREAM_SHA: ${{ needs.prepare.outputs.upstream_sha }}
+        run: node scripts/mj/report-upstream-failure.mjs
+
+      - name: Keep the maintenance run red
+        run: exit 1

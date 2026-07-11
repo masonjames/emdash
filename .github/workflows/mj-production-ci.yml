@@ -1,0 +1,308 @@
+# Full regression gate for Mason's production source branch. Pull requests are
+# review-only. A push to mj/prod emits evidence and may notify the separate site
+# vendoring lane, but this workflow never vendors, deploys, or purges caches.
+name: Mason production
+
+on:
+  pull_request:
+    branches:
+      - mj/prod
+  push:
+    branches:
+      - mj/prod
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mason-production-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream reference
+        run: |
+          git remote add upstream https://github.com/emdash-cms/emdash.git
+          git fetch --no-tags upstream main
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Validate patch ledger and its tests
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          node --test scripts/mj/tests/*.test.mjs
+          ledger_args=(
+            --production-ref HEAD
+            --upstream-ref upstream/main
+          )
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ -z "$PR_BASE_SHA" ]; then
+              echo "Pull-request validation requires the exact base SHA." >&2
+              exit 1
+            fi
+            expected_base=$(git rev-parse "$PR_BASE_SHA^{commit}")
+            expected_upstream=$(git rev-parse 'upstream/main^{commit}')
+            ledger_args+=(
+              --expected-production-sha "$expected_base"
+              --expected-upstream-sha "$expected_upstream"
+            )
+          fi
+          node scripts/mj/validate-patch-ledger.mjs "${ledger_args[@]}"
+
+      - name: Frozen install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit and integration tests
+        run: pnpm test:unit
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Admin browser tests
+        run: pnpm test:browser
+
+  patch-e2e:
+    name: patch E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Frozen install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build E2E dependency graph
+        run: pnpm run --filter emdash... build
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run carried-patch browser coverage
+        run: >-
+          pnpm exec playwright test
+          e2e/tests/auth.spec.ts
+          e2e/tests/content-actions.spec.ts
+          e2e/tests/media-library.spec.ts
+
+      - name: Upload failed browser evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mason-production-patch-e2e-${{ github.sha }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  evidence:
+    name: immutable source evidence
+    needs:
+      - verify
+      - patch-e2e
+    if: >-
+      github.ref == 'refs/heads/mj/prod' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout verified commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the verified commit to remain the production tip
+        env:
+          VERIFIED_SHA: ${{ github.sha }}
+        run: |
+          remote_tip=$(git ls-remote origin refs/heads/mj/prod | awk '{print $1}')
+          if [ "$remote_tip" != "$VERIFIED_SHA" ]; then
+            echo "Verified commit $VERIFIED_SHA is stale; current mj/prod is $remote_tip." >&2
+            exit 1
+          fi
+
+      - name: Create immutable source manifest
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERIFIED_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          tree=$(git rev-parse "$VERIFIED_SHA^{tree}")
+          archive_sha256=$(git archive --format=tar "$VERIFIED_SHA" | sha256sum | awk '{print $1}')
+          ledger_sha256=$(sha256sum docs/operations/mj-patch-ledger.json | awk '{print $1}')
+          generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n \
+            --arg repository "$REPOSITORY" \
+            --arg commit "$VERIFIED_SHA" \
+            --arg tree "$tree" \
+            --arg archive_sha256 "$archive_sha256" \
+            --arg ledger_sha256 "$ledger_sha256" \
+            --arg run_id "$RUN_ID" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            --arg run_url "$RUN_URL" \
+            --arg event "$EVENT_NAME" \
+            --arg generated_at "$generated_at" \
+            '{
+              source_repository: $repository,
+              emdash_commit: $commit,
+              emdash_tree: $tree,
+              source_archive_sha256: $archive_sha256,
+              patch_ledger_sha256: $ledger_sha256,
+              verification_run_id: $run_id,
+              verification_run_attempt: $run_attempt,
+              verification_run_url: $run_url,
+              verification_event: $event,
+              generated_at: $generated_at
+            }' > emdash-source-evidence.json
+          sha256sum emdash-source-evidence.json > emdash-source-evidence.json.sha256
+
+      - name: Upload source evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: emdash-source-evidence-${{ github.sha }}
+          path: |
+            emdash-source-evidence.json
+            emdash-source-evidence.json.sha256
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Dispatch separate site vendoring request
+        if: vars.MASON_SITE_VENDOR_DISPATCH_ENABLED == 'true'
+        env:
+          API_URL: ${{ github.api_url }}
+          MASON_SITE_DISPATCH_TOKEN: ${{ secrets.MASON_SITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$MASON_SITE_DISPATCH_TOKEN" ]; then
+            echo "MASON_SITE_VENDOR_DISPATCH_ENABLED is true but MASON_SITE_DISPATCH_TOKEN is missing." >&2
+            exit 1
+          fi
+          jq '{event_type: "emdash_verified_for_vendoring", client_payload: .}' \
+            emdash-source-evidence.json > /tmp/mason-site-dispatch.json
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${MASON_SITE_DISPATCH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary @/tmp/mason-site-dispatch.json \
+            "$API_URL/repos/masonjames/masonjames.com/dispatches"
+
+      - name: Summarize handoff state
+        env:
+          DISPATCH_ENABLED: ${{ vars.MASON_SITE_VENDOR_DISPATCH_ENABLED }}
+        run: |
+          echo "Exact source evidence uploaded for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DISPATCH_ENABLED" = "true" ]; then
+            echo "The separate masonjames.com vendoring request was dispatched." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Site vendoring dispatch remains disabled; no site repository or deployment was changed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  report-production-failure:
+    name: report production-source failure
+    needs:
+      - verify
+      - patch-e2e
+      - evidence
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/mj/prod' &&
+      github.event_name == 'push' &&
+      (needs.verify.result != 'success' ||
+       needs.patch-e2e.result != 'success' ||
+       needs.evidence.result != 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout trusted production source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Create or update assigned maintenance issue
+        env:
+          EVIDENCE_RESULT: ${{ needs.evidence.result }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          MJ_DETAIL_FILE: /tmp/mj-production-results.txt
+          MJ_FAILURE_STAGE: verification
+          MJ_PRODUCTION_SHA: ${{ github.sha }}
+          MJ_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MJ_UPSTREAM_SHA: ${{ github.sha }}
+          PATCH_E2E_RESULT: ${{ needs.patch-e2e.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          {
+            echo "verify=$VERIFY_RESULT"
+            echo "patch-e2e=$PATCH_E2E_RESULT"
+            echo "evidence=$EVIDENCE_RESULT"
+          } > "$MJ_DETAIL_FILE"
+          node scripts/mj/report-upstream-failure.mjs

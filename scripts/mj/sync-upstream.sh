@@ -1,29 +1,34 @@
 #!/usr/bin/env bash
-# sync-upstream.sh — mirror upstream main to the fork and merge it into mj/prod.
-# Run weekly or on demand from the repo root. See masonjames.com
-# docs/prd/emdash-production/prd.md AD-2 for the branching model.
+# Dispatch the clean-runner upstream preparation workflow. This entrypoint is
+# deliberately safe in dirty/shared checkouts: it never fetches, checks out,
+# merges, commits, or pushes from the local repository.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
-
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "error: working tree is dirty; commit or stash first" >&2
-  exit 1
+RECHECK=false
+case "${1:-}" in
+	--recheck)
+		RECHECK=true
+		shift
+		;;
+	--force-build)
+		echo "warning: --force-build is deprecated; the sync lane never executes candidate builds. Using --recheck." >&2
+		RECHECK=true
+		shift
+		;;
+esac
+if [[ $# -ne 0 ]]; then
+	echo "usage: $0 [--recheck]" >&2
+	exit 2
+fi
+if ! command -v gh >/dev/null 2>&1; then
+	echo "error: GitHub CLI (gh) is required" >&2
+	exit 1
 fi
 
-git fetch origin
+gh workflow run mj-sync-upstream.yml \
+	--repo masonjames/emdash \
+	--ref mj/prod \
+	--field "recheck=$RECHECK"
 
-# Fast-forward-only mirror: fork main never diverges from upstream.
-git push masonjames-fork origin/main:main
-
-git checkout mj/prod
-git merge origin/main
-
-# Prove the merged branch before publishing it.
-pnpm install
-pnpm build
-pnpm test
-
-git push masonjames-fork mj/prod
-
-echo "mj/prod synced to upstream $(git rev-parse --short origin/main) and pushed."
+echo "Dispatched the PR-only EmDash upstream workflow."
+echo "Follow: https://github.com/masonjames/emdash/actions/workflows/mj-sync-upstream.yml"
