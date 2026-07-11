@@ -72,11 +72,14 @@ export function validatePatchLedger(
 			);
 		}
 		if (expectedProductionSha !== null) {
-			if (!SHA_PATTERN.test(expectedProductionSha)) {
+			if (
+				typeof expectedProductionSha !== "string" ||
+				!SHA_PATTERN.test(expectedProductionSha)
+			) {
 				errors.push("expected production SHA must be a full commit SHA");
 			} else if (reviewedProductionSha !== expectedProductionSha) {
 				errors.push(
-					`reviewed_production_sha must equal the PR base ${expectedProductionSha}`,
+					`reviewed_production_sha must equal the PR base ${String(expectedProductionSha)}`,
 				);
 			}
 		}
@@ -92,11 +95,14 @@ export function validatePatchLedger(
 			);
 		}
 		if (expectedUpstreamSha !== null) {
-			if (!SHA_PATTERN.test(expectedUpstreamSha)) {
+			if (
+				typeof expectedUpstreamSha !== "string" ||
+				!SHA_PATTERN.test(expectedUpstreamSha)
+			) {
 				errors.push("expected upstream SHA must be a full commit SHA");
 			} else if (reviewedUpstreamSha !== expectedUpstreamSha) {
 				errors.push(
-					`reviewed_upstream_sha must equal the fetched upstream tip ${expectedUpstreamSha}`,
+					`reviewed_upstream_sha must equal the fetched upstream tip ${String(expectedUpstreamSha)}`,
 				);
 			}
 		}

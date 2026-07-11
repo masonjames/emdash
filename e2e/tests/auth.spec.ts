@@ -30,8 +30,17 @@ test.describe("Authentication", () => {
 		test("displays login page with passkey button", async ({ admin }) => {
 			await admin.goto("/login");
 
+			// Cold CI starts can render the Astro loading fallback while the admin
+			// island hydrates. Wait for that explicit boundary instead of relying
+			// on Playwright's five-second assertion default.
+			await expect(admin.page.getByText("Loading EmDash...", { exact: true })).toBeHidden({
+				timeout: 30000,
+			});
+
 			// Should show login page
-			await expect(admin.page.locator("h1")).toContainText("Sign in");
+			await expect(admin.page.getByRole("heading", { name: "Sign in" })).toBeVisible({
+				timeout: 15000,
+			});
 
 			// Should have passkey login button
 			await expect(admin.page.locator('button:has-text("Sign in with Passkey")')).toBeVisible();
