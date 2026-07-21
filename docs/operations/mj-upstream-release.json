@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "emdash-cms/emdash",
+  "previous_release_tag": null,
+  "previous_release_sha": null,
+  "release_tag": "emdash@0.30.0",
+  "release_sha": "3c555590ab0b0aa5eea2f8128cf3aeb956b6a033",
+  "release_url": "https://github.com/emdash-cms/emdash/releases/tag/emdash%400.30.0",
+  "published_at": "2026-07-21T10:31:47Z"
+}

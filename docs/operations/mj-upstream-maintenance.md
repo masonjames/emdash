@@ -1,116 +1,57 @@
-# Mason fork upstream maintenance
+# Mason EmDash fork maintenance
 
-`mj/prod` is the production source branch for Mason's EmDash builds. It is not
-an automatically writable mirror: upstream changes must arrive through a
-reviewed pull request, and the branch must pass the dedicated production gate
-before it can notify the site-vendoring lane.
+The fork carries one GitHub Actions workflow:
+`.github/workflows/mj-sync-upstream.yml`. Every workflow inherited from
+`emdash-cms/emdash` is deleted on the production branch and disabled in the
+repository settings. There is no CLA workflow and no workflow that runs on pull
+requests, comments, reviews, pushes, or contributor activity.
 
-## Automated flow
+## Release flow
 
-1. `.github/workflows/mj-sync-upstream.yml` runs weekly on clean GitHub-hosted
-   runners. A read-only preparation job fetches `emdash-cms/emdash:main` and
-   records the candidate Git tree without receiving a write credential. Both
-   scheduled and manual runs reject any workflow ref other than `mj/prod`.
-2. The workflow never pushes `mj/prod`, never merges its own pull request, and
-   never resolves a merge conflict. A separate publication job checks out the
-   exact recorded `mj/prod` commit, repeats the merge using Git only, requires
-   the upstream tip and candidate tree to match preparation, and then opens a
-   pull request. No code from the merged candidate executes in that job.
-3. Conflict, preparation, and publication failures are reported from separate
-   issues-only jobs. Each checks out the exact recorded production commit before
-   running the reporter, reasserts assignment and labels, and leaves the
-   maintenance run red.
-4. `.github/workflows/mj-production-ci.yml` is the required check for pull
-   requests targeting `mj/prod`. It validates the patch ledger, frozen install,
-   build, lint, typecheck, unit/browser tests, and targeted patch E2E coverage.
-5. After a human merges the pull request, the same production workflow verifies
-   the exact branch commit again and emits `emdash-source-evidence.json`. The
-   evidence contains the full commit, Git tree, archive SHA-256, patch-ledger
-   SHA-256, and workflow run identity.
-6. When `MASON_SITE_VENDOR_DISPATCH_ENABLED` is explicitly set to `true`, the
-   successful production run sends a `repository_dispatch` event named
-   `emdash_verified_for_vendoring` to `masonjames/masonjames.com`. Client/site
-   mutation remains disabled until that variable and its scoped credential are
-   deliberately configured.
+1. The watcher polls GitHub Releases every six hours and selects only stable
+   product tags matching `emdash@x.y.z`. Package releases such as
+   `@emdash-cms/admin@x.y.z` are ignored.
+2. `docs/operations/mj-upstream-release.json` records the exact upstream
+   product tag and commit already represented by `mj/prod`.
+3. A read-only job calculates the incremental Git diff between the tracked
+   product release and the new one. The upstream `.github` directory is
+   excluded before any candidate is created.
+4. A separate publication job checks out the exact same production base,
+   independently recreates the candidate, and requires the Git tree to match.
+   It never installs dependencies or executes upstream code.
+5. The candidate is committed once as `github-actions[bot]` and opened as
+   a draft pull request. Original upstream commits and authors are not copied
+   into the downstream PR, so no contributor list is available for a CLA or
+   notification bot to process.
+6. The workflow never merges the PR, writes `mj/prod`, updates the fork's
+   `main` branch, vendors the website, or deploys production.
 
-## Credentials and branch protection
+The production review must still confirm Mason's carried media behavior,
+including button uploads, drag-and-drop uploads, R2 URLs, and editable media
+metadata. Upstream CI covers upstream code; the fork's live deployment gate
+covers the downstream integration.
 
-- `MJ_SYNC_TOKEN` is required for candidate branch pushes and pull-request
-  creation. It must be a narrowly scoped token or GitHub App credential that can
-  write contents, workflows, and pull requests in `masonjames/emdash`. A token
-  outside `GITHUB_TOKEN` is intentional so the created pull request triggers its
-  checks. It is exposed only to the publication job, which runs fixed workflow
-  shell and Git/GitHub CLI commands and never executes files from the candidate.
-- `MASON_SITE_DISPATCH_TOKEN` is required only when site dispatch is enabled. It
-  must be able to send `repository_dispatch` to `masonjames/masonjames.com`; it
-  must not have deployment or environment-secret privileges.
-- Protect `mj/prod` against direct pushes. Require `Mason production / verify`
-  and `Mason production / patch E2E`, dismiss stale approvals, and require human
-  review. Do not enable auto-merge for upstream sync pull requests yet.
+## Repository settings
 
-## Site receiver contract
+- Default workflow token permission: read-only.
+- GitHub Actions cannot approve pull requests.
+- Only pinned GitHub-owned actions are allowed.
+- All historical inherited workflows remain manually disabled.
+- `MJ_SYNC_TOKEN` is exposed only to the publication step. Keep it scoped
+  to Contents and Pull requests for `masonjames/emdash`; it does not need
+  Actions, Workflows, Issues, or Administration permission because upstream
+  `.github` changes are excluded.
 
-The site repository receiver must treat the dispatch payload as a request, not
-as proof. Before opening a separate vendoring pull request it must:
+The Cloudflare Workers and Pages GitHub App is not a GitHub Actions workflow.
+It must not be connected to this source fork; production is deployed through
+the Mason website/Dokploy path.
 
-1. Query the referenced EmDash Actions run and require `conclusion=success` and
-   `head_sha` equal to `client_payload.emdash_commit`.
-2. Require that commit to still be the exact `mj/prod` tip.
-3. Check out EmDash at that detached commit in a clean workspace, recompute the
-   Git tree and archive SHA-256, and compare both with the payload.
-4. Vendor from that detached source without reading or changing an interactive
-   checkout. Record the exact EmDash commit and checksum in the site PR body and
-   a committed small provenance manifest.
-5. Run the complete site gate in rehearsal. Do not merge or deploy the site PR.
-6. Deduplicate by full EmDash commit; a retry updates the existing PR or issue.
-
-The receiver is intentionally not implemented from this repository. Until it
-exists and is reviewed in `masonjames.com`, leave
-`MASON_SITE_VENDOR_DISPATCH_ENABLED` unset or `false`.
-
-## Patch ledger
-
-`docs/operations/mj-patch-ledger.json` records every active patch set's commit
-anchors, regression commands, upstream status, and removal criteria. Validate it
-with:
+## Local verification
 
 ```bash
-git fetch origin main
-node scripts/mj/validate-patch-ledger.mjs \
-  --production-ref HEAD \
-  --upstream-ref origin/main
-```
-
-Update the ledger in the same pull request that adds, rebases, upstreams, or
-removes a carried patch. `upstream_merged_pending_removal` does not authorize an
-automatic deletion: compare behavior and migration history and run the named
-tests first. Pull-request CI additionally requires `reviewed_production_sha` to
-equal the exact PR base and `reviewed_upstream_sha` to equal the fetched
-`upstream/main` tip. This makes the generated PR intentionally fail until a
-reviewer records the revisions actually examined.
-
-For the exact pull-request gate, run:
-
-```bash
-node scripts/mj/validate-patch-ledger.mjs \
-  --production-ref HEAD \
-  --upstream-ref upstream/main \
-  --expected-production-sha "$(git rev-parse origin/mj/prod)" \
-  --expected-upstream-sha "$(git rev-parse upstream/main)"
-```
-
-## Local operator entrypoint
-
-`scripts/mj/sync-upstream.sh` only dispatches the clean-runner workflow. It does
-not check out, merge, or push from the current working directory:
-
-```bash
+node --test scripts/mj/tests/fork-policy.test.mjs
 scripts/mj/sync-upstream.sh
-scripts/mj/sync-upstream.sh --recheck
 ```
 
-The legacy `com.masonjames.emdash-sync` LaunchAgent was disabled and unloaded on
-2026-07-11. Its plist is retained only as rollback evidence; do not re-enable
-it. Local vendoring automation stays disabled until the site receiver above is
-merged and a test dispatch creates one review-only vendoring PR with matching
-evidence.
+The policy test fails if a second workflow, a contributor-facing trigger, an
+unpinned/non-GitHub action, or upstream bot configuration is reintroduced.
