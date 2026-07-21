@@ -14,7 +14,7 @@ function envString(env: Record<string, unknown>, ...keys: string[]): string | un
 /**
  * Resolve OAuth provider env for Worker and Node adapters.
  *
- * Worker adapters expose runtime bindings through `locals.runtime.env`. Node
+ * Worker adapters expose runtime bindings through `virtual:emdash/env`. Node
  * deployments need `process.env` because Vite bakes `import.meta.env` at build
  * time, before container runtime secrets are available.
  */

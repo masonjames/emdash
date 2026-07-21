@@ -42,6 +42,7 @@ import { MediaLibrary } from "./components/MediaLibrary";
 import { MenuEditor } from "./components/MenuEditor";
 import { MenuList } from "./components/MenuList";
 import { PluginManager } from "./components/PluginManager";
+import { PluginSettings } from "./components/PluginSettings";
 import { Redirects } from "./components/Redirects";
 import { RegistryBrowse } from "./components/RegistryBrowse";
 import { RegistryPluginDetail } from "./components/RegistryPluginDetail";
@@ -51,6 +52,7 @@ import { Sections } from "./components/Sections";
 import { Settings } from "./components/Settings";
 import { AllowedDomainsSettings } from "./components/settings/AllowedDomainsSettings";
 import { ApiTokenSettings } from "./components/settings/ApiTokenSettings";
+import { BackupSettings } from "./components/settings/BackupSettings";
 import { EmailSettings } from "./components/settings/EmailSettings";
 import { GeneralSettings } from "./components/settings/GeneralSettings";
 import { SecuritySettings } from "./components/settings/SecuritySettings";
@@ -130,6 +132,29 @@ import { UsersPage } from "./routes/users";
 // Router context type
 interface RouterContext {
 	queryClient: QueryClient;
+}
+
+interface ContentUpdateChanges {
+	data?: Record<string, unknown>;
+	slug?: string;
+	authorId?: string | null;
+	bylines?: BylineCreditInput[];
+	skipRevision?: boolean;
+	seo?: ContentSeoInput;
+	publishedAt?: string;
+}
+
+interface ContentUpdateMutationInput {
+	targetId: string;
+	targetLocale?: string;
+	source: "editor" | "auxiliary";
+	changes: ContentUpdateChanges;
+}
+
+interface AutosaveMutationInput {
+	targetId: string;
+	targetLocale?: string;
+	changes: Pick<ContentUpdateChanges, "data" | "slug" | "bylines">;
 }
 
 function patchAutosaveQueries(
@@ -251,7 +276,7 @@ function RootComponent() {
 	});
 
 	if (isLoading) {
-		return <LoadingScreen />;
+		return <ConfigurationLoadingScreen />;
 	}
 
 	if (error || !manifest) {
@@ -314,12 +339,8 @@ function ContentListPage() {
 
 	// Controlled sort state — passed to the list, and included in the query
 	// key so changing direction invalidates the current cursor chain.
-	const defaultListDateField: ContentListSort["field"] =
-		collection === "posts" ? "publishedAt" : "updatedAt";
-	const defaultFilterDateField: ContentDateFilter["field"] =
-		collection === "posts" ? "publishedAt" : "createdAt";
 	const [sort, setSort] = React.useState<ContentListSort>({
-		field: defaultListDateField,
+		field: "updatedAt",
 		direction: "desc",
 	});
 
@@ -331,19 +352,7 @@ function ContentListPage() {
 	// them restarts the cursor chain from a filtered first page.
 	const [statusFilter, setStatusFilter] = React.useState<ContentStatusFilter>("all");
 	const [authorFilter, setAuthorFilter] = React.useState("");
-	const [dateFilter, setDateFilter] = React.useState<ContentDateFilter>({
-		...EMPTY_DATE_FILTER,
-		field: defaultFilterDateField,
-	});
-
-	React.useEffect(() => {
-		setSort({ field: defaultListDateField, direction: "desc" });
-		setDateFilter((current) =>
-			current.from || current.to
-				? current
-				: { ...EMPTY_DATE_FILTER, field: defaultFilterDateField },
-		);
-	}, [collection, defaultFilterDateField, defaultListDateField]);
+	const [dateFilter, setDateFilter] = React.useState<ContentDateFilter>(EMPTY_DATE_FILTER);
 
 	// The date inputs yield calendar dates; widen them to UTC day boundaries so
 	// the inclusive `dateTo` covers the whole day (timestamps are stored in UTC).
@@ -593,8 +602,6 @@ function ContentListPage() {
 			urlPattern={collectionConfig.urlPattern}
 			sort={sort}
 			onSortChange={setSort}
-			dateField={defaultListDateField}
-			dateLabel={collection === "posts" ? t`Published` : undefined}
 			total={total}
 			onSearchChange={setSearchTerm}
 			statusFilter={statusFilter}
@@ -616,6 +623,7 @@ const contentNewRoute = createRoute({
 	getParentRoute: () => adminLayoutRoute,
 	path: "/content/$collection/new",
 	component: ContentNewPage,
+	staticData: { fullBleed: true },
 	validateSearch: (search: Record<string, unknown>) => ({
 		locale: typeof search.locale === "string" ? search.locale : undefined,
 	}),
@@ -689,6 +697,27 @@ function ContentNewPage() {
 		},
 	});
 
+	// Stable handler identities: these flow into the memoized
+	// ContentSettingsPanel, so fresh arrows on every mutation-state flip
+	// would defeat the memo. mutate/mutateAsync are referentially stable.
+	const handleSave = React.useCallback(
+		(payload: { data: Record<string, unknown>; slug?: string; bylines?: BylineCreditInput[] }) => {
+			createMutation.mutate(payload);
+		},
+		[createMutation.mutate],
+	);
+
+	const handleQuickCreateByline = React.useCallback(
+		(input: { slug: string; displayName: string }) => createBylineMutation.mutateAsync(input),
+		[createBylineMutation.mutateAsync],
+	);
+
+	const handleQuickEditByline = React.useCallback(
+		(bylineId: string, input: { slug: string; displayName: string }) =>
+			updateBylineMutation.mutateAsync({ id: bylineId, ...input }),
+		[updateBylineMutation.mutateAsync],
+	);
+
 	if (!manifest) {
 		return <LoadingScreen />;
 	}
@@ -698,14 +727,6 @@ function ContentNewPage() {
 	if (!collectionConfig) {
 		return <NotFoundPage message={`Collection "${collection}" not found`} />;
 	}
-
-	const handleSave = (payload: {
-		data: Record<string, unknown>;
-		slug?: string;
-		bylines?: BylineCreditInput[];
-	}) => {
-		createMutation.mutate(payload);
-	};
 
 	return (
 		<ContentEditor
@@ -722,14 +743,8 @@ function ContentNewPage() {
 			availableBylinesLoaded={bylinesLoaded}
 			selectedBylines={selectedBylines}
 			onBylinesChange={setSelectedBylines}
-			onQuickCreateByline={async (input) => {
-				const created = await createBylineMutation.mutateAsync(input);
-				return created;
-			}}
-			onQuickEditByline={async (bylineId, input) => {
-				const updated = await updateBylineMutation.mutateAsync({ id: bylineId, ...input });
-				return updated;
-			}}
+			onQuickCreateByline={handleQuickCreateByline}
+			onQuickEditByline={handleQuickEditByline}
 			manifest={manifest ?? null}
 		/>
 	);
@@ -740,6 +755,7 @@ const contentEditRoute = createRoute({
 	getParentRoute: () => adminLayoutRoute,
 	path: "/content/$collection/$id",
 	component: ContentEditPage,
+	staticData: { fullBleed: true },
 	validateSearch: (search) => ({
 		...(typeof search.field === "string" && { field: search.field }),
 		...(typeof search.locale === "string" && { locale: search.locale }),
@@ -855,6 +871,24 @@ function ContentEditPage() {
 	// transient `undefined` doesn't populate the cache with default-locale
 	// data.
 	const itemLocale = rawItem?.locale ?? undefined;
+	const autosaveCompletionSequenceRef = React.useRef(0);
+	const [autosaveCompletion, setAutosaveCompletion] = React.useState({ entryId: "", token: 0 });
+	const [editorSavePendingCounts, setEditorSavePendingCounts] = React.useState<
+		ReadonlyMap<string, number>
+	>(new Map());
+	const updateEditorSavePendingCount = React.useCallback((entryId: string, delta: 1 | -1) => {
+		setEditorSavePendingCounts((previous) => {
+			const next = new Map(previous);
+			const count = Math.max((next.get(entryId) ?? 0) + delta, 0);
+			if (count === 0) next.delete(entryId);
+			else next.set(entryId, count);
+			return next;
+		});
+	}, []);
+	const recordAutosaveCompletion = React.useCallback((entryId: string) => {
+		autosaveCompletionSequenceRef.current += 1;
+		setAutosaveCompletion({ entryId, token: autosaveCompletionSequenceRef.current });
+	}, []);
 	const { data: bylinesData, isSuccess: bylinesLoaded } = useQuery({
 		queryKey: ["bylines", "picker", itemLocale ?? null],
 		queryFn: () => fetchBylines({ locale: itemLocale, limit: 100 }),
@@ -880,82 +914,80 @@ function ContentEditPage() {
 		},
 	});
 
-	const updateMutation = useMutation({
-		mutationFn: (data: {
-			data?: Record<string, unknown>;
-			slug?: string;
-			authorId?: string | null;
-			bylines?: BylineCreditInput[];
-			skipRevision?: boolean;
-			seo?: ContentSeoInput;
-		}) => updateContent(collection, id, data, { locale: rawItem?.locale ?? activeLocale }),
-		onSuccess: (savedItem, variables) => {
-			patchAutosaveQueries(queryClient, {
-				collection,
-				id,
-				savedItem,
-				payload: {
-					data: variables.data,
-					slug: variables.slug,
-				},
-				locale: rawItem?.locale ?? activeLocale,
-			});
-			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
+	const handleContentUpdateSuccess = React.useCallback(
+		(targetId: string) => {
 			// Invalidate by (collection, id) prefix without the locale object: the
 			// editor's read query is keyed `{ locale: activeLocale }` (undefined when
 			// i18n is off) while `rawItem.locale` is the DB default "en", so a
 			// locale-scoped invalidation key would not match and the item would never
 			// refetch — leaving the publish/save buttons stale until a hard refresh.
 			void queryClient.invalidateQueries({
-				queryKey: ["content", collection, id],
+				queryKey: ["content", collection, targetId],
 			});
 			// Also invalidate revisions since a new one was created
-			void queryClient.invalidateQueries({ queryKey: ["revisions", collection, id] });
+			void queryClient.invalidateQueries({
+				queryKey: ["revisions", collection, targetId],
+			});
 			// Invalidate the cached draft revision so stale data doesn't overwrite the form
 			if (rawItem?.draftRevisionId) {
 				void queryClient.invalidateQueries({
 					queryKey: ["revision", rawItem.draftRevisionId],
 				});
 			}
-			if (savedItem.draftRevisionId && savedItem.draftRevisionId !== rawItem?.draftRevisionId) {
-				void queryClient.invalidateQueries({ queryKey: ["revision", savedItem.draftRevisionId] });
-			}
 		},
-		onError: (error) => {
+		[collection, queryClient, rawItem?.draftRevisionId],
+	);
+	const handleContentUpdateError = React.useCallback(
+		(error: unknown) => {
 			toastManager.add({
 				title: t`Failed to save`,
 				description: error instanceof Error ? error.message : t`An error occurred`,
 				type: "error",
 			});
 		},
+		[t, toastManager],
+	);
+
+	const updateMutation = useMutation({
+		mutationFn: ({ targetId, targetLocale, changes }: ContentUpdateMutationInput) =>
+			updateContent(collection, targetId, changes, { locale: targetLocale }),
+		onMutate: (variables) => {
+			if (variables.source === "editor") {
+				updateEditorSavePendingCount(variables.targetId, 1);
+			}
+		},
+		onSuccess: (_, variables) => {
+			handleContentUpdateSuccess(variables.targetId);
+		},
+		onError: handleContentUpdateError,
+		onSettled: (_, __, variables) => {
+			if (variables.source === "editor") {
+				updateEditorSavePendingCount(variables.targetId, -1);
+			}
+		},
 	});
 
 	// Autosave mutation - skips revision creation
-	const [lastAutosaveAt, setLastAutosaveAt] = React.useState<Date | null>(null);
 	const autosaveMutation = useMutation({
-		mutationFn: (data: {
-			data?: Record<string, unknown>;
-			slug?: string;
-			bylines?: BylineCreditInput[];
-		}) =>
+		mutationFn: ({ targetId, targetLocale, changes }: AutosaveMutationInput) =>
 			updateContent(
 				collection,
-				id,
-				{ ...data, skipRevision: true },
-				{ locale: rawItem?.locale ?? activeLocale },
+				targetId,
+				{ ...changes, skipRevision: true },
+				{ locale: targetLocale },
 			),
 		onSuccess: (savedItem, variables) => {
+			recordAutosaveCompletion(variables.targetId);
 			patchAutosaveQueries(queryClient, {
 				collection,
-				id,
+				id: variables.targetId,
 				savedItem,
 				payload: {
-					data: variables.data,
-					slug: variables.slug,
+					data: variables.changes.data,
+					slug: variables.changes.slug,
 				},
-				locale: rawItem?.locale ?? activeLocale,
+				locale: variables.targetLocale,
 			});
-			setLastAutosaveAt(new Date());
 			// Keep the cache fresh without refetching older server state back into the form
 			// while the user is still typing.
 		},
@@ -972,8 +1004,6 @@ function ContentEditPage() {
 		mutationFn: (publishedAt: string) =>
 			updateContent(collection, id, { publishedAt }, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
-			// Prefix invalidation also refreshes list queries, whose date
-			// column and ordering change with the publication date.
 			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			toastManager.add({ title: t`Publication date updated` });
 		},
@@ -989,7 +1019,6 @@ function ContentEditPage() {
 	const publishMutation = useMutation({
 		mutationFn: () => publishContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id],
 			});
@@ -1008,7 +1037,6 @@ function ContentEditPage() {
 	const unpublishMutation = useMutation({
 		mutationFn: () => unpublishContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id],
 			});
@@ -1027,7 +1055,6 @@ function ContentEditPage() {
 	const discardDraftMutation = useMutation({
 		mutationFn: () => discardDraft(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id],
 			});
@@ -1050,7 +1077,6 @@ function ContentEditPage() {
 		mutationFn: (scheduledAt: string) =>
 			scheduleContent(collection, id, scheduledAt, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id],
 			});
@@ -1072,7 +1098,6 @@ function ContentEditPage() {
 		mutationFn: () =>
 			unscheduleContent(collection, id, { locale: rawItem?.locale ?? activeLocale }),
 		onSuccess: () => {
-			void queryClient.invalidateQueries({ queryKey: ["content", collection] });
 			void queryClient.invalidateQueries({
 				queryKey: ["content", collection, id],
 			});
@@ -1143,6 +1168,92 @@ function ContentEditPage() {
 
 	const pluginBlocks = React.useMemo(() => (manifest ? getPluginBlocks(manifest) : []), [manifest]);
 
+	// Stable handler identities: these flow into the memoized
+	// ContentSettingsPanel, so fresh arrows on every mutation-state flip
+	// (twice per autosave cycle) would defeat the memo. mutate/mutateAsync
+	// are referentially stable.
+	const handleSave = React.useCallback(
+		(payload: { data: Record<string, unknown>; slug?: string; bylines?: BylineCreditInput[] }) => {
+			updateMutation.mutate({
+				targetId: id,
+				targetLocale: rawItem?.locale ?? activeLocale,
+				source: "editor",
+				changes: payload,
+			});
+		},
+		[activeLocale, id, rawItem?.locale, updateMutation.mutate],
+	);
+
+	const handleAutosave = React.useCallback(
+		(payload: { data: Record<string, unknown>; slug?: string; bylines?: BylineCreditInput[] }) => {
+			autosaveMutation.mutate({
+				targetId: id,
+				targetLocale: rawItem?.locale ?? activeLocale,
+				changes: payload,
+			});
+		},
+		[activeLocale, autosaveMutation.mutate, id, rawItem?.locale],
+	);
+	const handleAuthorChange = React.useCallback(
+		(authorId: string | null) => {
+			updateMutation.mutate({
+				targetId: id,
+				targetLocale: rawItem?.locale ?? activeLocale,
+				source: "auxiliary",
+				changes: { authorId },
+			});
+		},
+		[activeLocale, id, rawItem?.locale, updateMutation.mutate],
+	);
+
+	const handleSeoChange = React.useCallback(
+		(seo: ContentSeoInput) => {
+			updateMutation.mutate({
+				targetId: id,
+				targetLocale: rawItem?.locale ?? activeLocale,
+				source: "auxiliary",
+				changes: { seo },
+			});
+		},
+		[activeLocale, id, rawItem?.locale, updateMutation.mutate],
+	);
+
+	const handlePublish = React.useCallback(() => publishMutation.mutate(), [publishMutation.mutate]);
+	const handleUnpublish = React.useCallback(
+		() => unpublishMutation.mutate(),
+		[unpublishMutation.mutate],
+	);
+	const handleDiscardDraft = React.useCallback(
+		() => discardDraftMutation.mutate(),
+		[discardDraftMutation.mutate],
+	);
+	const handleSchedule = React.useCallback(
+		(scheduledAt: string) => scheduleMutation.mutate(scheduledAt),
+		[scheduleMutation.mutate],
+	);
+	const handleUnschedule = React.useCallback(
+		() => unscheduleMutation.mutate(),
+		[unscheduleMutation.mutate],
+	);
+	const handleUpdatePublishedAt = React.useCallback(
+		(publishedAt: string) => updatePublishedAtMutation.mutate(publishedAt),
+		[updatePublishedAtMutation.mutate],
+	);
+	const handleDelete = React.useCallback(() => deleteMutation.mutate(), [deleteMutation.mutate]);
+	const handleTranslate = React.useCallback(
+		(locale: string) => translateMutation.mutate(locale),
+		[translateMutation.mutate],
+	);
+	const handleQuickCreateByline = React.useCallback(
+		(input: { slug: string; displayName: string }) => createBylineMutation.mutateAsync(input),
+		[createBylineMutation.mutateAsync],
+	);
+	const handleQuickEditByline = React.useCallback(
+		(bylineId: string, input: { slug: string; displayName: string }) =>
+			updateBylineMutation.mutateAsync({ id: bylineId, ...input }),
+		[updateBylineMutation.mutateAsync],
+	);
+
 	if (!manifest) {
 		return <LoadingScreen />;
 	}
@@ -1157,30 +1268,6 @@ function ContentEditPage() {
 		return <LoadingScreen />;
 	}
 
-	const handleSave = (payload: {
-		data: Record<string, unknown>;
-		slug?: string;
-		bylines?: BylineCreditInput[];
-	}) => {
-		updateMutation.mutate(payload);
-	};
-
-	const handleAutosave = (payload: {
-		data: Record<string, unknown>;
-		slug?: string;
-		bylines?: BylineCreditInput[];
-	}) => {
-		autosaveMutation.mutate(payload);
-	};
-
-	const handleAuthorChange = (authorId: string | null) => {
-		updateMutation.mutate({ authorId });
-	};
-
-	const handleSeoChange = (seo: ContentSeoInput) => {
-		updateMutation.mutate({ seo });
-	};
-
 	return (
 		<ContentEditor
 			collection={collection}
@@ -1188,19 +1275,23 @@ function ContentEditPage() {
 			item={item}
 			fields={collectionConfig.fields}
 			isSaving={updateMutation.isPending}
+			isSaveFeedbackActive={(editorSavePendingCounts.get(id) ?? 0) > 0}
 			onSave={handleSave}
 			onAutosave={handleAutosave}
 			isAutosaving={autosaveMutation.isPending}
-			lastAutosaveAt={lastAutosaveAt}
-			onPublish={() => publishMutation.mutate()}
-			onUnpublish={() => unpublishMutation.mutate()}
-			onDiscardDraft={() => discardDraftMutation.mutate()}
-			onSchedule={(scheduledAt) => scheduleMutation.mutate(scheduledAt)}
-			onUnschedule={() => unscheduleMutation.mutate()}
+			isAutosaveFeedbackActive={
+				autosaveMutation.isPending && autosaveMutation.variables?.targetId === id
+			}
+			autosaveCompletionToken={autosaveCompletion.entryId === id ? autosaveCompletion.token : 0}
+			onPublish={handlePublish}
+			onUnpublish={handleUnpublish}
+			onDiscardDraft={handleDiscardDraft}
+			onSchedule={handleSchedule}
+			onUnschedule={handleUnschedule}
 			isScheduling={scheduleMutation.isPending}
-			onUpdatePublishedAt={(publishedAt) => updatePublishedAtMutation.mutate(publishedAt)}
+			onUpdatePublishedAt={handleUpdatePublishedAt}
 			isUpdatingPublishedAt={updatePublishedAtMutation.isPending}
-			onDelete={() => deleteMutation.mutate()}
+			onDelete={handleDelete}
 			isDeleting={deleteMutation.isPending}
 			supportsDrafts={collectionConfig.supports.includes("drafts")}
 			supportsRevisions={collectionConfig.supports.includes("revisions")}
@@ -1210,20 +1301,14 @@ function ContentEditPage() {
 			onAuthorChange={handleAuthorChange}
 			i18n={i18n}
 			translations={translationsData?.translations}
-			onTranslate={(locale) => translateMutation.mutate(locale)}
+			onTranslate={handleTranslate}
 			pluginBlocks={pluginBlocks}
 			hasSeo={collectionConfig.hasSeo}
 			onSeoChange={handleSeoChange}
 			availableBylines={bylinesData?.items}
 			availableBylinesLoaded={bylinesLoaded}
-			onQuickCreateByline={async (input) => {
-				const created = await createBylineMutation.mutateAsync(input);
-				return created;
-			}}
-			onQuickEditByline={async (bylineId, input) => {
-				const updated = await updateBylineMutation.mutateAsync({ id: bylineId, ...input });
-				return updated;
-			}}
+			onQuickCreateByline={handleQuickCreateByline}
+			onQuickEditByline={handleQuickEditByline}
 			manifest={manifest ?? null}
 		/>
 	);
@@ -1279,7 +1364,9 @@ function MediaPage() {
 			isLoading={isLoading || isFetchingNextPage}
 			hasMore={!!hasNextPage}
 			onLoadMore={() => void fetchNextPage()}
-			onUpload={(file) => uploadMutation.mutateAsync(file).then(() => undefined)}
+			onUpload={async (file) => {
+				await uploadMutation.mutateAsync(file);
+			}}
 			onLocalSearchChange={setSearch}
 			onLocalMimeFilterChange={setMimeFilter}
 		/>
@@ -1491,6 +1578,13 @@ const emailSettingsRoute = createRoute({
 	getParentRoute: () => adminLayoutRoute,
 	path: "/settings/email",
 	component: EmailSettings,
+});
+
+// Backup settings route
+const backupSettingsRoute = createRoute({
+	getParentRoute: () => adminLayoutRoute,
+	path: "/settings/backups",
+	component: BackupSettings,
 });
 
 // General settings route
@@ -1947,13 +2041,27 @@ function ContentTypesEditPage() {
 		<ContentTypeEditor
 			collection={collection}
 			isSaving={updateMutation.isPending}
-			onSave={(input) => updateMutation.mutate(input as UpdateCollectionInput)}
+			onSave={(input) => updateMutation.mutate(input)}
 			onAddField={(input) => addFieldMutation.mutateAsync(input)}
 			onUpdateField={(fieldSlug, input) => updateFieldMutation.mutateAsync({ fieldSlug, input })}
 			onDeleteField={(fieldSlug) => deleteFieldMutation.mutate(fieldSlug)}
 			onReorderFields={(fieldSlugs) => reorderFieldsMutation.mutate(fieldSlugs)}
 		/>
 	);
+}
+
+// Auto-generated plugin settings route (from admin.settingsSchema).
+// Lives under /plugins-manager so it can never shadow a plugin's own
+// admin pages (which own the /plugins/$pluginId/* namespace).
+const pluginSettingsRoute = createRoute({
+	getParentRoute: () => adminLayoutRoute,
+	path: "/plugins-manager/$pluginId/settings",
+	component: PluginSettingsPage,
+});
+
+function PluginSettingsPage() {
+	const { pluginId } = useParams({ from: "/_admin/plugins-manager/$pluginId/settings" });
+	return <PluginSettings pluginId={pluginId} />;
 }
 
 // Plugin page route
@@ -2000,6 +2108,7 @@ const adminRoutes = adminLayoutRoute.addChildren([
 	menuListRoute,
 	menuEditorRoute,
 	pluginManagerRoute,
+	pluginSettingsRoute,
 	marketplaceDetailRoute,
 	marketplaceBrowseRoute,
 	themeMarketplaceBrowseRoute,
@@ -2021,6 +2130,7 @@ const adminRoutes = adminLayoutRoute.addChildren([
 	allowedDomainsSettingsRoute,
 	apiTokenSettingsRoute,
 	emailSettingsRoute,
+	backupSettingsRoute,
 	wordpressImportRoute,
 	notFoundRoute,
 ]);
@@ -2052,6 +2162,22 @@ declare module "@tanstack/react-router" {
 }
 
 // Shared components
+
+export function ConfigurationLoadingScreen() {
+	const { t } = useLingui();
+	return (
+		<div className="emdash-configuration-loader">
+			<div className="loader-inner">
+				<div
+					className="spinner emdash-configuration-spinner"
+					role="status"
+					aria-label={t`Loading`}
+				/>
+				<p className="emdash-configuration-label">{t`Loading configuration...`}</p>
+			</div>
+		</div>
+	);
+}
 
 function LoadingScreen() {
 	const { t } = useLingui();
