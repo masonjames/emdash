@@ -64,7 +64,7 @@ function createMemoryStorage(): {
 			return "http://localhost/signed";
 		},
 		getPublicUrl(key: string) {
-			return `/_emdash/api/media/file/${key}`;
+			return `https://media.example.com/${key}`;
 		},
 	};
 	return { store, storage };
@@ -202,11 +202,12 @@ describe("POST /media — upload widening via fieldId", () => {
 
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as {
-			data?: { item?: { mimeType: string } };
+			data?: { item?: { mimeType: string; url: string } };
 			error?: { code: string };
 		};
 		expect(body.error).toBeUndefined();
 		expect(body.data?.item?.mimeType).toBe("application/zip");
+		expect(body.data?.item?.url).toMatch(/^https:\/\/media\.example\.com\//);
 	});
 
 	it("rejects a zip upload when no fieldId is provided (global allowlist)", async () => {

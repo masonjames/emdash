@@ -10,9 +10,10 @@ import * as path from "node:path";
 import type { APIRoute } from "astro";
 import { ulid } from "ulidx";
 
-import { requirePerm } from "#api/authorize.js";
+import { canReadMediaUsageCount, requirePerm } from "#api/authorize.js";
 import { apiError, apiSuccess, handleError, unwrapResult } from "#api/error.js";
 import { GLOBAL_UPLOAD_ALLOWLIST, resolveFieldAllowlist } from "#api/handlers/media-allowlist.js";
+import { handleMediaUsageSummaries } from "#api/handlers/media-usage.js";
 import { isParseError, parseQuery } from "#api/parse.js";
 import { DEFAULT_MAX_UPLOAD_SIZE, formatFileSize, mediaListQuery } from "#api/schemas.js";
 import { MediaRepository } from "#db/repositories/media.js";
@@ -28,15 +29,10 @@ export const prerender = false;
 const HTTP_URL_RE = /^https?:\/\//;
 
 /**
- * Add URL to media items
- * Uses relative URLs to ensure portability across deployments
+ * Add the configured public/CDN URL when available, falling back to the
+ * portable same-origin proxy route.
  */
 function addUrlToMedia(item: MediaItem, storage?: Storage): MediaItem & { url: string } {
-	// Prefer the configured public/CDN URL — serving originals through the
-	// Node proxy makes the Media Library crawl. Fall back to the relative
-	// proxy route when no public URL is configured (local driver, portability).
-	// Guarded call: partial Storage doubles in upstream tests (and older
-	// third-party impls) may not implement getPublicUrl.
 	const publicUrl =
 		typeof storage?.getPublicUrl === "function" ? storage.getPublicUrl(item.storageKey) : undefined;
 	return {
@@ -78,8 +74,26 @@ export const GET: APIRoute = async ({ request, locals }) => {
 
 	// Add URL to each media item (relative URLs for portability)
 	const itemsWithUrl = result.data.items.map((item) => addUrlToMedia(item, emdash.storage));
+	if (query.includeUsage !== "1") {
+		return apiSuccess({ items: itemsWithUrl, nextCursor: result.data.nextCursor });
+	}
 
-	return apiSuccess({ items: itemsWithUrl, nextCursor: result.data.nextCursor });
+	const includeCount = canReadMediaUsageCount(user, locals.tokenScopes);
+	const usageResult = await handleMediaUsageSummaries(
+		emdash.db,
+		itemsWithUrl.map((item) => item.id),
+		{ includeCount },
+	);
+	if (!usageResult.success) return unwrapResult(usageResult);
+
+	const itemsWithUsage = [];
+	for (const item of itemsWithUrl) {
+		const usage = usageResult.data[item.id];
+		if (!usage) return apiError("MEDIA_USAGE_READ_ERROR", "Failed to read media usage", 500);
+		itemsWithUsage.push({ ...item, usage });
+	}
+
+	return apiSuccess({ items: itemsWithUsage, nextCursor: result.data.nextCursor });
 };
 
 /**
