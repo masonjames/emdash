@@ -40,6 +40,7 @@ function mimeMatchExpr(eb: ExpressionBuilder<Database, "media">, filters: string
 }
 
 export type MediaStatus = "pending" | "ready" | "failed";
+export type MediaVisibility = "public" | "private";
 
 export interface MediaItem {
 	id: string;
@@ -57,6 +58,7 @@ export interface MediaItem {
 	dominantColor: string | null;
 	createdAt: string;
 	authorId: string | null;
+	visibility: MediaVisibility;
 }
 
 export interface CreateMediaInput {
@@ -73,6 +75,7 @@ export interface CreateMediaInput {
 	dominantColor?: string;
 	status?: MediaStatus;
 	authorId?: string;
+	visibility?: MediaVisibility;
 }
 
 export interface FindManyMediaOptions {
@@ -83,6 +86,7 @@ export interface FindManyMediaOptions {
 	status?: MediaStatus | "all"; // Filter by status, defaults to "ready"
 	/** Case-insensitive substring matched against the filename (covers filename and extension). */
 	q?: string;
+	visibility?: MediaVisibility | "all";
 }
 
 const UPLOAD_ATTEMPT_CLEANUP_AGE_MS = 60 * 60 * 1000;
@@ -117,6 +121,7 @@ export class MediaRepository {
 			status: input.status ?? "ready",
 			created_at: now,
 			author_id: input.authorId ?? null,
+			visibility: input.visibility ?? "public",
 		};
 
 		await this.db.insertInto("media").values(row).execute();
@@ -353,6 +358,7 @@ export class MediaRepository {
 			.selectAll()
 			.where("content_hash", "=", contentHash)
 			.where("status", "=", "ready")
+			.where("visibility", "=", "public")
 			.executeTakeFirst();
 
 		return row ? this.rowToItem(row) : null;
@@ -407,6 +413,9 @@ export class MediaRepository {
 		// Default to only showing ready items
 		if (options.status !== "all") {
 			query = query.where("status", "=", options.status ?? "ready");
+		}
+		if (options.visibility !== "all") {
+			query = query.where("visibility", "=", options.visibility ?? "public");
 		}
 
 		const rows = await query.execute();
@@ -521,6 +530,8 @@ export class MediaRepository {
 			status: row.status as MediaStatus,
 			createdAt: row.created_at,
 			authorId: row.author_id,
+			// eslint-disable-next-line typescript/no-unsafe-type-assertion -- migration constrains stored values
+			visibility: row.visibility as MediaVisibility,
 		};
 	}
 }

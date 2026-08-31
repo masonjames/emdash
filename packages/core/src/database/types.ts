@@ -76,6 +76,7 @@ export interface MediaTable {
 	dominant_color: string | null;
 	created_at: Generated<string>;
 	author_id: string | null;
+	visibility: Generated<string>; // 'public' | 'private'
 }
 
 export interface MediaUploadAttemptTable {
@@ -694,6 +695,7 @@ export type MediaRow = {
 	dominant_color: string | null;
 	created_at: string;
 	author_id: string | null;
+	visibility: string; // 'public' | 'private'
 };
 
 export interface RedirectTable {
