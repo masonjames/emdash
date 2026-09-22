@@ -70,7 +70,15 @@ export const GET: APIRoute = async (ctx) => {
 				return unsupportedHeic();
 			}
 
-			const sourceUrl = resolveStorageImageSource(storage, key, url);
+			let sourceUrl = resolveStorageImageSource(storage, key, url);
+			const mediaVersion = new URL(url.searchParams.get("href")!, url).searchParams.get(
+				"_emdash_media",
+			);
+			if (sourceUrl && mediaVersion) {
+				const versionedSource = new URL(sourceUrl);
+				versionedSource.searchParams.set("_emdash_media", mediaVersion);
+				sourceUrl = versionedSource.href;
+			}
 			const externalUrl = sourceUrl
 				? await resolveExternalImageServiceUrl(
 						service,
