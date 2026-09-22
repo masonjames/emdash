@@ -2268,6 +2268,11 @@ export function createMcpServer(
 			}
 			try {
 				const { handleMediaUpload } = await import("../api/handlers/media-upload.js");
+				const { configuredImageServiceSupportsHeic } = await import("../astro/image-service.js");
+				const heicSupported = await configuredImageServiceSupportsHeic(
+					emdash.storage,
+					emdash.config.siteUrl,
+				);
 				return unwrap(
 					await handleMediaUpload(emdash.db, emdash.storage, {
 						filename: args.filename,
@@ -2277,6 +2282,7 @@ export function createMcpServer(
 						alt: args.alt,
 						authorId: userId,
 						maxUploadSize: emdash.config.maxUploadSize,
+						heicSupported,
 					}),
 				);
 			} catch (error) {

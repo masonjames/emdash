@@ -9,6 +9,20 @@ import {
 const LOCAL_IMAGE = "/_emdash/api/media/file/01ABC.jpg";
 
 describe("getMediaThumbnailUrl", () => {
+	it("transforms storage-backed public HEIC URLs and preserves replacement versions", () => {
+		const result = getMediaThumbnailUrl(
+			"https://media.example.com/photo.heic",
+			"image/heic",
+			400,
+			"sha256:new",
+			"photo.heic",
+		);
+		const thumbnail = new URL(result, window.location.origin);
+		expect(thumbnail.pathname).toBe("/_image");
+		const source = new URL(thumbnail.searchParams.get("href")!);
+		expect(source.pathname).toBe("/_emdash/api/media/file/photo.heic");
+		expect(source.searchParams.get("_emdash_media")).toBe("sha256:new");
+	});
 	it("routes a local raster image through Astro's /_image endpoint", () => {
 		const result = getMediaThumbnailUrl(LOCAL_IMAGE, "image/jpeg");
 		expect(result.startsWith("/_image?")).toBe(true);
