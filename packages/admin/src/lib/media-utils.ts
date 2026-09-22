@@ -102,6 +102,7 @@ export function providerItemToMediaItem(
 
 /** Root-absolute path prefix for locally stored media served by EmDash. */
 const INTERNAL_MEDIA_PREFIX = "/_emdash/api/media/file/";
+const TRANSFORMABLE_STORAGE_KEY = /^[A-Za-z0-9._-]+$/;
 
 export function getMediaPreviewUrl(originalUrl: string, contentHash?: string | null): string {
 	if (!contentHash || !originalUrl.startsWith(INTERNAL_MEDIA_PREFIX)) return originalUrl;
@@ -146,6 +147,7 @@ export function getMediaThumbnailUrl(
 ): string {
 	const previewUrl = getMediaPreviewUrl(originalUrl, contentHash);
 	if (!mimeType.startsWith("image/") || mimeType === "image/svg+xml") return previewUrl;
+	if (storageKey && !TRANSFORMABLE_STORAGE_KEY.test(storageKey)) return previewUrl;
 	const sourceUrl = storageKey
 		? getMediaPreviewUrl(`${INTERNAL_MEDIA_PREFIX}${encodeURIComponent(storageKey)}`, contentHash)
 		: previewUrl;
