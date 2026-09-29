@@ -9,7 +9,7 @@ describe("RegistryConfigurationBanner", () => {
 			<RegistryConfigurationBanner
 				error={{
 					code: "REGISTRY_AGGREGATOR_URL_INVALID",
-					field: "experimental.registry.aggregatorUrl",
+					field: "registry.aggregatorUrl",
 				}}
 			/>,
 		);
@@ -19,9 +19,7 @@ describe("RegistryConfigurationBanner", () => {
 			.toBeInTheDocument();
 		await expect
 			.element(
-				screen.getByText(
-					"Check experimental.registry.aggregatorUrl in astro.config.mjs, then restart EmDash.",
-				),
+				screen.getByText("Check registry.aggregatorUrl in astro.config.mjs, then restart EmDash."),
 			)
 			.toBeInTheDocument();
 	});
@@ -31,7 +29,7 @@ describe("RegistryConfigurationBanner", () => {
 			<RegistryConfigurationBanner
 				error={{
 					code: "REGISTRY_MINIMUM_RELEASE_AGE_INVALID",
-					field: "experimental.registry.policy.minimumReleaseAge",
+					field: "registry.policy.minimumReleaseAge",
 				}}
 			/>,
 		);
@@ -39,7 +37,7 @@ describe("RegistryConfigurationBanner", () => {
 		await expect
 			.element(
 				screen.getByText(
-					"Check experimental.registry.policy.minimumReleaseAge in astro.config.mjs, then restart EmDash.",
+					"Check registry.policy.minimumReleaseAge in astro.config.mjs, then restart EmDash.",
 				),
 			)
 			.toBeInTheDocument();
@@ -51,16 +49,14 @@ describe("RegistryConfigurationBanner", () => {
 				error={
 					{
 						code: "REGISTRY_FUTURE_SETTING_INVALID",
-						field: "experimental.registry.futureSetting",
+						field: "registry.futureSetting",
 					} as never
 				}
 			/>,
 		);
 
 		await expect
-			.element(
-				screen.getByText("Check experimental.registry in astro.config.mjs, then restart EmDash."),
-			)
+			.element(screen.getByText("Check registry in astro.config.mjs, then restart EmDash."))
 			.toBeInTheDocument();
 		expect(screen.container.textContent).not.toContain("aggregatorUrl");
 	});

@@ -6,7 +6,7 @@
  * update/uninstall for marketplace-installed plugins.
  */
 
-import { Badge, Button, Checkbox, Switch, Toast } from "@cloudflare/kumo";
+import { Badge, Button, Checkbox, Link as KumoLink, Switch, Toast } from "@cloudflare/kumo";
 import { plural } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import {
@@ -62,20 +62,35 @@ import { DialogError, getMutationError } from "./DialogError.js";
 import { RegistryPluginIdentity, useRegistryPluginIdentity } from "./RegistryPluginIdentity.js";
 import { RouterLinkButton } from "./RouterLinkButton.js";
 
-export function MarketplaceInstallMessage() {
+export function RegistryInstallMessage() {
 	return (
 		<Trans>
 			Browse the{" "}
-			<Link to="/plugins/marketplace" className="text-kumo-link hover:underline">
-				marketplace
+			<Link to="/plugins/registry" className="text-kumo-link hover:underline">
+				registry
 			</Link>{" "}
-			to install plugins, or add them to your astro.config.mjs.
+			to install plugins.
+		</Trans>
+	);
+}
+
+const PLUGIN_INSTALL_DOCS_URL = "https://docs.emdashcms.com/plugins/installing/";
+
+export function PluginInstallDocsMessage() {
+	return (
+		<Trans>
+			Learn how to install plugins in the{" "}
+			<KumoLink href={PLUGIN_INSTALL_DOCS_URL} target="_blank" rel="noreferrer">
+				documentation
+				<KumoLink.ExternalIcon />
+			</KumoLink>
+			.
 		</Trans>
 	);
 }
 
 export interface PluginManagerProps {
-	/** Admin manifest — used to check if marketplace is configured */
+	/** Admin manifest — used to check if registry discovery is available */
 	manifest?: AdminManifest;
 }
 
@@ -83,7 +98,8 @@ export function PluginManager({ manifest }: PluginManagerProps) {
 	const { t } = useLingui();
 	const queryClient = useQueryClient();
 	const toastManager = Toast.useToastManager();
-	const hasMarketplace = !!manifest?.marketplace;
+	const hasRegistry = !!manifest?.registry;
+	const canInstallFromRegistry = hasRegistry && manifest?.sandboxEnabled === true;
 
 	const {
 		data: plugins,
@@ -189,9 +205,9 @@ export function PluginManager({ manifest }: PluginManagerProps) {
 							{t`Check for updates`}
 						</Button>
 					)}
-					{hasMarketplace && (
-						<RouterLinkButton to="/plugins/marketplace" variant="ghost" icon={<Storefront />}>
-							{t`Marketplace`}
+					{hasRegistry && (
+						<RouterLinkButton to="/plugins/registry" variant="ghost" icon={<Storefront />}>
+							{t`Registry`}
 						</RouterLinkButton>
 					)}
 					<span className="text-sm text-kumo-subtle">{t`${plugins?.length ?? 0} plugins`}</span>
@@ -207,7 +223,6 @@ export function PluginManager({ manifest }: PluginManagerProps) {
 						onEnable={() => enableMutation.mutate(plugin.id)}
 						onDisable={() => disableMutation.mutate(plugin.id)}
 						isToggling={enableMutation.isPending || disableMutation.isPending}
-						hasMarketplace={hasMarketplace}
 					/>
 				))}
 			</div>
@@ -217,11 +232,7 @@ export function PluginManager({ manifest }: PluginManagerProps) {
 					<ADMIN_NAV_ICONS.plugins className="mx-auto h-12 w-12 text-kumo-subtle" />
 					<h3 className="mt-4 text-lg font-medium">{t`No plugins configured`}</h3>
 					<p className="mt-2 text-sm text-kumo-subtle">
-						{hasMarketplace ? (
-							<MarketplaceInstallMessage />
-						) : (
-							t`Add plugins to your astro.config.mjs to extend EmDash functionality.`
-						)}
+						{canInstallFromRegistry ? <RegistryInstallMessage /> : <PluginInstallDocsMessage />}
 					</p>
 				</div>
 			)}
@@ -235,18 +246,9 @@ interface PluginCardProps {
 	onEnable: () => void;
 	onDisable: () => void;
 	isToggling: boolean;
-	/** Whether the marketplace is configured (controls "View in Marketplace" link) */
-	hasMarketplace: boolean;
 }
 
-function PluginCard({
-	plugin,
-	updateInfo,
-	onEnable,
-	onDisable,
-	isToggling,
-	hasMarketplace,
-}: PluginCardProps) {
+function PluginCard({ plugin, updateInfo, onEnable, onDisable, isToggling }: PluginCardProps) {
 	const { t } = useLingui();
 	const [expanded, setExpanded] = React.useState(false);
 	const [showUpdateConsent, setShowUpdateConsent] = React.useState(false);
@@ -356,17 +358,14 @@ function PluginCard({
 				acknowledgedProfileCid: registryVerification?.profileCid,
 				acknowledgedReleaseCid: registryVerification?.releaseCid,
 			};
-			if (registryEscalation?.code === "ROUTE_VISIBILITY_ESCALATION") {
-				opts.confirmRouteVisibilityChanges = true;
-			}
+			opts.acknowledgedPublicRoutes = registryEscalation?.routeVisibilityChanges?.newlyPublic ?? [];
 			updateMutation.mutate(opts);
 		} else {
 			if (!marketplaceReviewedVersion) return;
 			updateMutation.mutate({
 				version: marketplaceReviewedVersion,
 				confirmCapabilityChanges: (marketplaceEscalation?.capabilityChanges.added.length ?? 0) > 0,
-				confirmRouteVisibilityChanges:
-					(marketplaceEscalation?.routeVisibilityChanges?.newlyPublic.length ?? 0) > 0,
+				acknowledgedPublicRoutes: marketplaceEscalation?.routeVisibilityChanges?.newlyPublic ?? [],
 				confirmMcpTools: mcpUpdateTools.length > 0,
 			});
 		}
@@ -522,18 +521,6 @@ function PluginCard({
 							>
 								{updateMutation.isPending ? t`Updating...` : t`Update to v${updateInfo.latest}`}
 							</Button>
-						)}
-
-						{isMarketplace && hasMarketplace && (
-							<RouterLinkButton
-								to="/plugins/marketplace/$pluginId"
-								params={{ pluginId: plugin.id }}
-								variant="ghost"
-								size="sm"
-								icon={<Storefront />}
-							>
-								{t`View in Marketplace`}
-							</RouterLinkButton>
 						)}
 
 						{plugin.hasSettings && plugin.enabled && (

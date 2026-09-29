@@ -37,7 +37,7 @@ describe("normalizeRegistryConfig", () => {
 		expect(resolveManifestRegistryConfig({ aggregatorUrl })).toEqual({
 			error: {
 				code,
-				field: "experimental.registry.aggregatorUrl",
+				field: "registry.aggregatorUrl",
 			},
 		});
 	});
@@ -51,7 +51,7 @@ describe("normalizeRegistryConfig", () => {
 		).toEqual({
 			error: {
 				code: "REGISTRY_MINIMUM_RELEASE_AGE_INVALID",
-				field: "experimental.registry.policy.minimumReleaseAge",
+				field: "registry.policy.minimumReleaseAge",
 			},
 		});
 	});
@@ -68,7 +68,7 @@ describe("normalizeRegistryConfig", () => {
 		).toEqual({
 			error: {
 				code: "REGISTRY_MINIMUM_RELEASE_AGE_EXCLUDE_INVALID",
-				field: "experimental.registry.policy.minimumReleaseAgeExclude",
+				field: "registry.policy.minimumReleaseAgeExclude",
 			},
 		});
 	});

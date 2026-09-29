@@ -1,8 +1,45 @@
 import { describe, expect, it } from "vitest";
 
 import emdash from "../../../../src/astro/integration/index.js";
+import {
+	DEFAULT_REGISTRY_AGGREGATOR_URL,
+	resolveRegistryConfigForSandbox,
+} from "../../../../src/registry/config.js";
 
 describe("registry integration configuration", () => {
+	it("uses the hosted registry by default when the plugin sandbox is enabled", () => {
+		expect(
+			resolveRegistryConfigForSandbox({ sandboxRunner: "./sandbox.mjs", sandboxEnabled: true }),
+		).toBe(DEFAULT_REGISTRY_AGGREGATOR_URL);
+		expect(
+			resolveRegistryConfigForSandbox({ sandboxRunner: "./sandbox.mjs", sandboxEnabled: false }),
+		).toBeUndefined();
+	});
+
+	it("uses the configured registry in place of the hosted default", () => {
+		const registry = { aggregatorUrl: "https://registry.example.com" };
+
+		expect(
+			resolveRegistryConfigForSandbox({
+				registry,
+				sandboxRunner: "./sandbox.mjs",
+				sandboxEnabled: true,
+			}),
+		).toBe(registry);
+	});
+
+	it("allows the registry option to disable registry discovery", () => {
+		expect(
+			resolveRegistryConfigForSandbox({
+				registry: false,
+				sandboxRunner: "./sandbox.mjs",
+				sandboxEnabled: true,
+			}),
+		).toBeUndefined();
+
+		expect(() => emdash({ registry: false, sandboxRunner: "./sandbox.mjs" })).not.toThrow();
+	});
+
 	it.each([
 		["a malformed aggregator URL", { aggregatorUrl: "not a URL" }, "aggregatorUrl"],
 		[
@@ -16,28 +53,44 @@ describe("registry integration configuration", () => {
 				aggregatorUrl: "https://registry.example.com",
 				policy: { minimumReleaseAge: "tomorrow" },
 			},
-			"minimumReleaseAge",
+			"policy.minimumReleaseAge",
 		],
 	] as const)("fails during integration creation for %s", (_label, registry, field) => {
-		expect(() => emdash({ experimental: { registry } })).toThrow(
-			new RegExp(`EmDash registry configuration error.*${field}`),
+		expect(() => emdash({ registry })).toThrow(
+			new RegExp(`EmDash registry configuration error in registry[.]${field}`),
 		);
 	});
 
 	it("accepts shorthand and full registry configuration", () => {
-		expect(() =>
-			emdash({ experimental: { registry: "https://registry.example.com" } }),
-		).not.toThrow();
+		expect(() => emdash({ registry: "https://registry.example.com" })).not.toThrow();
 		expect(() =>
 			emdash({
-				experimental: {
-					registry: {
-						aggregatorUrl: "https://registry.example.com/",
-						acceptLabelers: "did:web:labeler.example",
-						policy: { minimumReleaseAge: "48h" },
-					},
+				registry: {
+					aggregatorUrl: "https://registry.example.com/",
+					acceptLabelers: "did:web:labeler.example",
+					policy: { minimumReleaseAge: "48h" },
 				},
 			}),
 		).not.toThrow();
+	});
+
+	it("rejects the removed experimental.registry option with a migration hint", () => {
+		expect(() =>
+			emdash({
+				// @ts-expect-error - removed option still present in untyped JavaScript configuration
+				experimental: {
+					registry: {
+						aggregatorUrl: "https://registry.example.com",
+						policy: { minimumReleaseAge: "48h" },
+					},
+				},
+				sandboxRunner: "./sandbox.mjs",
+			}),
+		).toThrow(/`experimental\.registry` has been removed.*top-level `registry` option instead/);
+	});
+
+	it("ignores an empty experimental block", () => {
+		// @ts-expect-error - removed option still present in untyped JavaScript configuration
+		expect(() => emdash({ experimental: {} })).not.toThrow();
 	});
 });

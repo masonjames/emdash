@@ -146,7 +146,14 @@ describe("Database Migrations (Integration)", () => {
 		db = await setupTestDatabaseWithCollections();
 
 		// Kysely requires the retained migration records to form a contiguous prefix.
-		const start = MIGRATION_NAMES.indexOf("034_published_at_index");
+		//
+		// The window starts after 043: migration 083 restructures the table 043
+		// creates, so replaying 043 against a database that has already reached 083
+		// would try to index `locale` and `translation_group`, which 083 removes.
+		// Migrations are forward-only — 043 is shipped history and is not edited to
+		// accommodate a later one — and the window has to stay contiguous, so
+		// excluding 043 also excludes everything before it.
+		const start = MIGRATION_NAMES.indexOf("044_comment_reactions");
 		expect(start).toBeGreaterThanOrEqual(0);
 		const trailing = MIGRATION_NAMES.slice(start);
 
@@ -175,6 +182,15 @@ describe("Database Migrations (Integration)", () => {
 	});
 
 	describe("exact migration status", () => {
+		it("registers each migration under a unique increasing sequence number", () => {
+			const sequence = MIGRATION_NAMES.map((name) => Number(name.slice(0, 3)));
+
+			expect(MIGRATION_NAMES).toEqual(MIGRATION_NAMES.toSorted());
+			expect(sequence.every(Number.isInteger)).toBe(true);
+			expect(new Set(sequence)).toHaveLength(sequence.length);
+			expect(sequence).toEqual(sequence.toSorted((left, right) => left - right));
+		});
+
 		it("exports the registered migration names in execution order", async () => {
 			await runMigrations(db);
 			const rows = await db
