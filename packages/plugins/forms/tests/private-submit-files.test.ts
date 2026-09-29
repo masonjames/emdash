@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { deleteSubmissionFiles } from "../src/cleanup.js";
 import { submitHandler } from "../src/handlers/submit.js";
 import { createPlugin } from "../src/index.js";
+import { submitSchema } from "../src/schemas.js";
 import type { FormDefinition } from "../src/types.js";
 
 const form: FormDefinition = {
@@ -80,6 +81,15 @@ function context(bytes = [0x25, 0x50, 0x44, 0x46, 0x2d]) {
 }
 
 describe("private form attachments", () => {
+	it("accepts multipart byte buffers at the existing 25 MB boundary", () => {
+		const { ctx } = context();
+		const bytes = new ArrayBuffer(25 * 1024 * 1024);
+		const input = { ...ctx.input, files: { brief: { ...ctx.input.files.brief, bytes } } };
+		expect(submitSchema.parse(input).files?.brief?.bytes.byteLength).toBe(bytes.byteLength);
+		input.files.brief.bytes = new ArrayBuffer(bytes.byteLength + 1);
+		expect(submitSchema.safeParse(input).success).toBe(false);
+	});
+
 	it("grants editors submission access without granting form or plugin configuration", () => {
 		const routes = createPlugin().routes;
 		expect(routes["submissions/list"]?.permission).toBe("plugins:read");

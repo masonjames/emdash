@@ -123,7 +123,7 @@ describe("file uploads on public submissions", () => {
 		expect(submitSchema.safeParse(submission([256])).success).toBe(false);
 	});
 
-	it("rejects file bytes above the 10 MB ceiling", () => {
+	it("rejects file bytes above the 25 MB ceiling", () => {
 		const bytes = Array.from<number>({ length: MAX_SUBMISSION_FILE_BYTES + 1 }).fill(0);
 		expect(submitSchema.safeParse(submission(bytes)).success).toBe(false);
 	});

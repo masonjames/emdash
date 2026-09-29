@@ -179,7 +179,7 @@ export type DefinitionInput = z.infer<typeof definitionSchema>;
 // ─── Submission Schemas ──────────────────────────────────────────
 
 /** Upper bound for one uploaded file, applied even when the field sets no `maxFileSize`. */
-export const MAX_SUBMISSION_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_SUBMISSION_FILE_BYTES = 25 * 1024 * 1024;
 
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
@@ -193,6 +193,7 @@ function decodeBase64(b64: string): Uint8Array<ArrayBuffer> {
 /** File contents as base64, or as an array of byte values; either way parsed to bytes. */
 const fileBytes = z
 	.union([
+		z.instanceof(ArrayBuffer).transform((bytes) => new Uint8Array(bytes)),
 		z
 			.string()
 			.max(Math.ceil(MAX_SUBMISSION_FILE_BYTES / 3) * 4, "File is too large")
