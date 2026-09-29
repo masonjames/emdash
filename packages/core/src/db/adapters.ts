@@ -134,9 +134,9 @@ export interface LibsqlConfig {
 }
 
 /**
- * SQLite database adapter (better-sqlite3)
+ * SQLite database adapter (node:sqlite)
  *
- * For local development and Node.js deployments.
+ * For local development and Node.js deployments. Requires Node.js 22.16 or later.
  *
  * @example
  * ```ts
@@ -149,7 +149,7 @@ export function sqlite(config: SqliteConfig): DatabaseDescriptor {
 		config,
 		type: "sqlite",
 		migrations: {
-			entrypoint: "emdash/db/sqlite-migrations",
+			entrypoint: "emdash/internal/db/sqlite-migrations",
 			manifestConfig: { url: config.url },
 		},
 	};
@@ -175,7 +175,7 @@ export function libsql(config: LibsqlConfig): DatabaseDescriptor {
 		config: runtimeConfig,
 		type: "sqlite",
 		migrations: {
-			entrypoint: "emdash/db/libsql-migrations",
+			entrypoint: "emdash/internal/db/libsql-migrations",
 			manifestConfig: {
 				url: config.url,
 				authTokenEnv: migrationEnvironmentVariable(
@@ -199,7 +199,14 @@ export interface PostgresConfig {
 	user?: string;
 	password?: string;
 	ssl?: boolean;
-	pool?: { min?: number; max?: number };
+	pool?: {
+		min?: number;
+		max?: number;
+		/** Maximum time to wait for a connection, in milliseconds. Uses the pg default when omitted. */
+		connectionTimeoutMillis?: number;
+		/** Time before an idle client is closed, in milliseconds. Uses the pg default when omitted. */
+		idleTimeoutMillis?: number;
+	};
 	migrationConnectionStringEnv?: string;
 }
 
@@ -220,7 +227,7 @@ export function postgres(config: PostgresConfig): DatabaseDescriptor {
 		config: runtimeConfig,
 		type: "postgres",
 		migrations: {
-			entrypoint: "emdash/db/postgres-migrations",
+			entrypoint: "emdash/internal/db/postgres-migrations",
 			manifestConfig: {
 				connectionStringEnv: migrationEnvironmentVariable(
 					migrationConnectionStringEnv,

@@ -29,8 +29,10 @@ import {
 	Trophy,
 	ClockCounterClockwise,
 	IdentificationCard,
+	SquaresFour,
 } from "@phosphor-icons/react";
 import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -38,6 +40,8 @@ import {
 	filterNavItemsByRole,
 	getSidebarTaxonomies,
 	isItemActive,
+	NavIcon,
+	parseFolderState,
 	resolveItemPath,
 	resolveNavIcon,
 	resolvePluginPageLabel,
@@ -99,6 +103,19 @@ describe("isItemActive", () => {
 	});
 });
 
+describe("NavIcon", () => {
+	it("uses Phosphor's filled variant while its navigation item is active", () => {
+		const inactiveIcon = renderToStaticMarkup(<NavIcon icon={SquaresFour} isActive={false} />);
+		const activeIcon = renderToStaticMarkup(<NavIcon icon={SquaresFour} isActive />);
+
+		expect(inactiveIcon).toBe(
+			renderToStaticMarkup(<SquaresFour weight="regular" aria-hidden="true" />),
+		);
+		expect(activeIcon).toBe(renderToStaticMarkup(<SquaresFour weight="fill" aria-hidden="true" />));
+		expect(activeIcon).not.toBe(inactiveIcon);
+	});
+});
+
 describe("BYLINE_SCHEMA_NAV_ITEM invariants", () => {
 	it("points to the /byline-schema route", () => {
 		expect(BYLINE_SCHEMA_NAV_ITEM.to).toBe("/byline-schema");
@@ -151,6 +168,22 @@ describe("filterNavItemsByRole", () => {
 		// must strip every gated entry at role=0.
 		const visible = filterNavItemsByRole(items, 0).map((i) => i.to);
 		expect(visible).toEqual(["/"]);
+	});
+});
+
+describe("parseFolderState", () => {
+	it("keeps only label → boolean pairs from the stored value", () => {
+		expect(parseFolderState('{"Calendar":false,"Club":true,"x":"yes","y":1}')).toEqual({
+			Calendar: false,
+			Club: true,
+		});
+	});
+
+	it("treats missing, malformed, or non-object storage as no choices", () => {
+		expect(parseFolderState(null)).toEqual({});
+		expect(parseFolderState("{oops")).toEqual({});
+		expect(parseFolderState("[true]")).toEqual({});
+		expect(parseFolderState("null")).toEqual({});
 	});
 });
 

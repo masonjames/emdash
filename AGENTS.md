@@ -8,33 +8,50 @@ When writing, revising, or reviewing documentation, load the `writing-emdash-doc
 
 # Rules
 
-**Backwards compatibility matters.** EmDash is published and in active use, pre-1.0. Prefer additive changes (new fields, new routes, new options with defaults). Breaking changes need an explicit decision, a package bump, and a changeset that calls the break out clearly. Database migrations are forward-only -- never write one that leaves existing content inaccessible. When in doubt, open a Discussion.
+**Backwards compatibility matters.** EmDash is published, in active use, and on 1.x. Prefer additive changes (new fields, new routes, new options with defaults). Breaking changes need an explicit decision, a major version bump, and a changeset that calls the break out clearly. Database migrations are forward-only -- never write one that leaves existing content inaccessible. When the compatibility decision is unclear, propose a Discussion instead of choosing a breaking design.
 
-**TDD for bugs.** Failing test -> fix -> verify. A bug without a reproducing test is not fixed.
+**Regression evidence for bugs.** A fix must demonstrate that it changes the reported behavior. Add a regression test when it can protect meaningful behavior; otherwise report the reproduction and verification. See [Testing](#testing).
 
 **Localize everything user-facing.** All admin UI strings, aria labels, and toast messages go through Lingui. All admin layout uses RTL-safe logical Tailwind classes. See [Localization](#admin-ui-localization-lingui) and [RTL](#admin-ui-rtl-safe-tailwind).
 
-**Scope discipline.** No drive-by refactors, no bulk lint/type cleanups, no "while I'm here" edits in unrelated files. If you see a systemic issue, open a Discussion. See [CONTRIBUTING.md § Contribution Policy](CONTRIBUTING.md#contribution-policy).
+**Scope discipline.** No drive-by refactors, no bulk lint/type cleanups, no "while I'm here" edits in unrelated files. Report systemic issues separately instead of expanding the current change. See [CONTRIBUTING.md § Contribution Policy](CONTRIBUTING.md#contribution-policy).
 
-**Never add queries to the logged-out hot path.** Any change that increases the query count of a logged-out route needs a _really_ good reason -- and that includes cold-start or first-request-only queries, not just steady state. See [Performance](#performance-caching-and-query-patterns).
+**Protect the logged-out hot path.** Any change that increases the query count of a logged-out route needs explicit justification -- and that includes cold-start or first-request-only queries, not just steady state. See [Performance](#performance-caching-and-query-patterns).
 
 **Comments are for code readers, not reviewers.** Write a comment only when the code can't be made clearer, or to give a non-obvious "why". Never justification, narrative, or issue/PR references. See [Comments](#comments).
 
 ## Workflow
 
-Before starting any work that involves editing code, run `pnpm lint:json | jq '.diagnostics | length'` and confirm it's clean -- if it's failing after your edits, your changes caused it.
+Main is kept green. Do not run checks before editing merely to establish a baseline, and do not dismiss validation failures as pre-existing. Before committing code:
 
-During work:
+- Run `pnpm format`.
+- Run `pnpm build` from the repository root. Package-scoped builds are not sufficient because validation resolves declaration output from other workspace packages.
+- Run `pnpm lint:quick` and confirm `pnpm --silent lint:json | jq '.diagnostics | length'` returns zero.
+- Run the tests relevant to the changed behavior.
+- Run `pnpm typecheck` (packages) or `pnpm typecheck:demos` (Astro demos).
 
-- `pnpm lint:quick` after every edit (sub-second)
-- `pnpm typecheck` (packages) or `pnpm typecheck:demos` (Astro demos) after each round of edits
-- `pnpm format` regularly (oxfmt, tabs)
+If a check fails, make sure the root build is current and rerun it. Treat any remaining failure as introduced by the current work and fix it before committing.
 
 Before opening a PR: tests pass, lint clean, formatted, changeset added if a published package changed. See [.changeset/README.md](.changeset/README.md).
 
 A changeset is user-facing documentation that lands verbatim in a package CHANGELOG. Review its usefulness to someone upgrading, not only its presence and frontmatter. Follow [.changeset/README.md](.changeset/README.md) for the canonical writing and review standard, including proportional detail and migration guidance for default or breaking changes.
 
 When opening a PR with `gh`/the API, copy `.github/PULL_REQUEST_TEMPLATE.md` into the body and fill every section -- the GitHub UI injects it automatically but the CLI does not, and PRs missing it are auto-closed. Check the AI-generated code disclosure box and name the model. Tick checklist items only for what you actually verified; for test-only/docs/CI PRs, note why changeset/i18n/Discussion items are n/a.
+
+Issues that refer to the interface must include a screenshot that shows the reported state. PRs that change the UI must include screenshots of the rendered result; include before-and-after images when the change is not clear from the result alone. Keep the behavior described in text and give every image useful alt text.
+
+Agents can attach local images with GitHub CLI 2.99.0 or later. The `--attach` flag is repeatable on `gh issue create|edit|comment` and `gh pr create|edit|comment`. For example:
+
+```bash
+gh issue create --body-file /tmp/emdash-issue.md \
+	--attach './interface-error.png#The settings screen showing the validation error'
+
+gh pr create --body-file /tmp/emdash-pr.md \
+	--attach './before.png#Settings screen before the change' \
+	--attach './after.png#Settings screen after the change'
+```
+
+To place an image at a specific point in the body, add `![descriptive alt text](./after.png)` to the body file and pass `--attach ./after.png`; `gh` replaces the local path with the uploaded asset URL. An attachment that is not referenced in the body is appended. CLI `--attach` uploads require repository write access. See [CONTRIBUTING.md § Interface screenshots](CONTRIBUTING.md#interface-screenshots).
 
 ## Architecture
 
@@ -160,7 +177,7 @@ Test representative upgrades from existing data, retry after partial completion,
 
 ## Indexes
 
-Every content table gets indexes on: `status`, `slug`, `created_at`, `deleted_at`, `scheduled_at` (partial, `WHERE scheduled_at IS NOT NULL`), `live_revision_id`, `draft_revision_id`, `author_id`, `primary_byline_id`, `updated_at`, `locale`, `translation_group`. Foreign key columns always get an index.
+Every content table gets indexes on: `status`, `slug`, `created_at`, `deleted_at`, `(deleted_at, scheduled_at)` (partial, `WHERE scheduled_at IS NOT NULL`), `live_revision_id`, `draft_revision_id`, `author_id`, `primary_byline_id`, `updated_at`, `locale`, `translation_group`. Foreign key columns always get an index.
 
 Naming: `idx_{table}_{column}` for single-column, `idx_{table}_{purpose}` for multi-column.
 
@@ -222,7 +239,7 @@ after(async () => {
 
 **One query beats two.** Use `LEFT JOIN` for parent+children. Batch with `WHERE id IN (...)`, chunked at `SQL_BATCH_SIZE` (from `utils/chunks.ts`) for D1's bind-parameter limit.
 
-**Query-count snapshots.** `pnpm query-counts` (see `scripts/query-counts.mjs`) records per-route query counts in `scripts/query-counts.snapshot.{sqlite,d1}.json`. CI auto-updates on PRs -- review the diff. Fewer is always right; more needs a conversation. An increase on a logged-out route is presumed wrong: the snapshot diff makes it visible, it does not make it acceptable.
+**Query-count snapshots.** `pnpm query-counts` (see `scripts/query-counts.mjs`) records per-route query counts in `scripts/query-counts.snapshot.{sqlite,d1}.json`. CI auto-updates on PRs -- review the diff. Prefer fewer round trips; justify increases against the behavior they enable. An increase on a logged-out route is presumed wrong: the snapshot diff makes it visible, it does not make it acceptable.
 
 # Admin UI
 
@@ -230,7 +247,7 @@ The admin (`packages/admin`) is a React SPA mounted under `/_emdash/admin/*`.
 
 ## Kumo Components
 
-Built on [Kumo](https://github.com/cloudflare/kumo) (Cloudflare's design system). Never roll your own buttons, inputs, dialogs, etc. -- use Kumo. Get consistent styling, dark mode, accessibility, RTL for free.
+Built on [Kumo](https://github.com/cloudflare/kumo) (Cloudflare's design system). Never roll your own buttons, inputs, dialogs, etc. -- use Kumo so shared styling, dark-mode behavior, accessibility, and RTL support stay consistent.
 
 Look up docs from the CLI:
 
@@ -375,10 +392,12 @@ In libraries used in a Worker but not themselves Workers, install `@cloudflare/w
 
 # Testing
 
-- **Framework:** vitest. Tests in `packages/core/tests/`.
-- **No mocks for the DB.** SQLite (`better-sqlite3`) by default. PostgreSQL parity tests via a real `pg` connection with per-test schema isolation (set `EMDASH_TEST_PG` to a connection string for a role with `CREATEDB` to opt in).
+- **Framework:** Vitest for package tests and Playwright for browser tests. Package tests usually live in that package's `tests/` or `test/` directory; core tests live in `packages/core/tests/`, and browser tests live in `e2e/tests/`.
+- **No mocks for the DB.** Node's built-in SQLite driver by default. PostgreSQL parity tests via a real `pg` connection with per-test schema isolation (set `EMDASH_TEST_PG` to a connection string for a role with `CREATEDB` to opt in).
 - **Utilities:** `tests/utils/test-db.ts` exposes `setupTestDatabase()`, `setupTestDatabaseWithCollections()`, `teardownTestDatabase()` for SQLite and `setupTestPostgresDatabase()` etc. for Postgres. Dialect-agnostic: `setupForDialect`, `setupForDialectWithCollections`, `teardownForDialect`, plus `describeEachDialect(name, fn)`. Use the dialect wrapper for query-builder code -- regressions tend to be dialect-specific.
-- **Structure:** `tests/unit/`, `tests/integration/`, `tests/e2e/` (Playwright). Test files mirror source structure. Each test gets a fresh DB.
+- **Core structure:** `packages/core/tests/unit/`, `packages/core/tests/integration/`, and `packages/core/tests/workerd/`. Test files mirror source structure. Each database test gets a fresh DB.
+
+For a bug fix, add an automated regression test when the failure is deterministic and the test can exercise a stable behavior boundary. Write it first when practical and confirm that it fails for the reported reason. If the only possible test would be brittle, disproportionate, environment-specific, or a restatement of the implementation, do not add it merely to satisfy a TDD rule; report the reproduction and verification instead. Inconvenient setup alone is not a reason to skip a useful test.
 
 **A test must be able to fail on a real regression.** If it can't, it's not a test -- delete it. The common offenders:
 

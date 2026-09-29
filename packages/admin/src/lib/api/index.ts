@@ -7,7 +7,9 @@
 // Base client and shared types
 export {
 	API_BASE,
+	ApiResponseError,
 	apiFetch,
+	isTerminalRequestError,
 	parseApiResponse,
 	throwResponseError,
 	type FindManyResult,
@@ -58,7 +60,18 @@ export {
 // Media
 export {
 	type MediaItem,
+	type LocalMediaItem,
+	type MediaFolder,
+	type MediaFolderListResult,
+	type MediaUpdateInput,
 	type MediaUploadOptions,
+	type MediaUsageCoverageStatus,
+	type MediaUsageCoverage,
+	type MediaUsageOccurrenceDetail,
+	type MediaUsageSourceDetail,
+	type MediaUsageEntryDetail,
+	type MediaUsageSiteSettingDetail,
+	type MediaUsageDetailsResponse,
 	type MediaProviderCapabilities,
 	type MediaProviderInfo,
 	type MediaProviderItem,
@@ -66,7 +79,15 @@ export {
 	MEDIA_SEARCH_MAX_LENGTH,
 	fetchMediaList,
 	fetchMediaItem,
+	fetchMediaUsageDetails,
+	MediaUsageAccessDeniedError,
+	fetchMediaFolders,
+	fetchMediaFolder,
+	createMediaFolder,
+	renameMediaFolder,
+	deleteMediaFolder,
 	uploadMedia,
+	replaceMediaImage,
 	deleteMedia,
 	updateMedia,
 	fetchMediaProviders,
@@ -85,6 +106,7 @@ export {
 	type UpdateCollectionInput,
 	type CreateFieldInput,
 	type UpdateFieldInput,
+	type BlockType,
 	type OrphanedTable,
 	fetchCollections,
 	fetchCollection,
@@ -99,6 +121,7 @@ export {
 	reorderCollections,
 	fetchOrphanedTables,
 	registerOrphanedTable,
+	fetchBlockTypes,
 } from "./schema.js";
 
 // Plugins
@@ -115,7 +138,12 @@ export {
 } from "./plugins.js";
 
 // Settings
-export { type SiteSettings, fetchSettings, updateSettings } from "./settings.js";
+export {
+	type SiteSettings,
+	type SiteSettingsUpdate,
+	fetchSettings,
+	updateSettings,
+} from "./settings.js";
 
 // Users, passkeys, allowed domains
 export {
@@ -397,3 +425,31 @@ export {
 
 // Current user
 export { type CurrentUser, useCurrentUser } from "./current-user.js";
+
+// Relations (reference fields)
+export {
+	type BoundField,
+	type CreateRelationInput,
+	type EntryRef,
+	type ReferencePageOptions,
+	type RelationDef,
+	type RelationSide,
+	type RelationWithUsage,
+	type UpdateRelationInput,
+	createRelation,
+	deleteRelation,
+	fetchReferenceChildren,
+	fetchReferenceParents,
+	fetchRelation,
+	fetchRelations,
+	updateRelation,
+} from "./relations.js";
+
+// Entry edit locks
+export {
+	type EntryLockHolder,
+	type EntryLockStatus,
+	acquireEntryLock,
+	releaseEntryLock,
+	entryLockRefusal,
+} from "./entry-lock.js";

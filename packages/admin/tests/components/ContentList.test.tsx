@@ -88,6 +88,33 @@ describe("ContentList", () => {
 			await expect.element(screen.getByText("My Post")).toBeInTheDocument();
 		});
 
+		it("links published translations to their locale-prefixed path", async () => {
+			const items = [
+				makeItem({
+					status: "published",
+					slug: "polski-test",
+					locale: "pl",
+					data: { title: "Polski test" },
+				}),
+			];
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={items}
+					urlPattern="/posts/{slug}"
+					i18n={{
+						defaultLocale: "en",
+						locales: ["en", "pl"],
+						prefixDefaultLocale: false,
+					}}
+				/>,
+			);
+
+			await expect
+				.element(screen.getByRole("link", { name: "View published Polski test" }))
+				.toHaveAttribute("href", "/pl/posts/polski-test");
+		});
+
 		it("falls back to data.name when title is missing", async () => {
 			const items = [makeItem({ id: "1", data: { name: "Named Item" } })];
 			const screen = await render(<ContentList {...defaultProps} items={items} />);
@@ -254,6 +281,36 @@ describe("ContentList", () => {
 			);
 			await expect.element(screen.getByText("42")).toBeInTheDocument();
 		});
+
+		it("shows each trashed item's locale when i18n is configured", async () => {
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={[]}
+					trashedItems={[makeTrashedItem({ id: "t1", locale: "fr" })]}
+					i18n={{ defaultLocale: "en", locales: ["en", "fr"] }}
+					activeLocale="fr"
+					onLocaleChange={() => {}}
+				/>,
+			);
+			await screen.getByText("Trash").click();
+			await expect
+				.element(screen.getByRole("columnheader", { name: "Locale" }))
+				.toBeInTheDocument();
+			await expect.element(screen.getByRole("cell", { name: "fr" })).toBeInTheDocument();
+		});
+
+		it("omits the trash locale column on a single-locale site", async () => {
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={[]}
+					trashedItems={[makeTrashedItem({ id: "t1", locale: "en" })]}
+				/>,
+			);
+			await screen.getByText("Trash").click();
+			expect(screen.getByRole("columnheader", { name: "Locale" }).query()).toBeNull();
+		});
 	});
 
 	describe("status badges", () => {
@@ -347,6 +404,106 @@ describe("ContentList", () => {
 				const option = screen.getByRole("option", { name: label });
 				await expect.element(option).toBeInTheDocument();
 				expect(option.element().querySelector("svg")).not.toBeNull();
+			}
+		});
+
+		it("opens the date range calendar and clears the active range", async () => {
+			const onDateFilterChange = vi.fn();
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={[makeItem()]}
+					statusFilter="all"
+					onStatusFilterChange={vi.fn()}
+					dateFilter={{ field: "createdAt", from: "2026-08-10", to: "2026-08-18" }}
+					onDateFilterChange={onDateFilterChange}
+				/>,
+			);
+
+			await screen.getByRole("button", { name: /Filter by date range:/ }).click();
+			await expect.element(screen.getByText("Choose a date range")).toBeInTheDocument();
+
+			await screen.getByRole("button", { name: "Clear", exact: true }).click();
+			expect(onDateFilterChange).toHaveBeenCalledWith({
+				field: "createdAt",
+				from: "",
+				to: "",
+			});
+		});
+
+		it("supports an upper-bound-only date filter", async () => {
+			const onDateFilterChange = vi.fn();
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={[makeItem()]}
+					statusFilter="all"
+					onStatusFilterChange={vi.fn()}
+					dateFilter={{ field: "createdAt", from: "2026-08-18", to: "2026-08-18" }}
+					onDateFilterChange={onDateFilterChange}
+				/>,
+			);
+
+			await screen.getByRole("button", { name: /Filter by date range:/ }).click();
+			await screen.getByRole("button", { name: "Use as end date" }).click();
+
+			expect(onDateFilterChange).toHaveBeenCalledWith({
+				field: "createdAt",
+				from: "",
+				to: "2026-08-18",
+			});
+		});
+
+		it("edits an upper-bound-only filter without converting it to a range", async () => {
+			const onDateFilterChange = vi.fn();
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={[makeItem()]}
+					statusFilter="all"
+					onStatusFilterChange={vi.fn()}
+					dateFilter={{ field: "createdAt", from: "", to: "2026-08-18" }}
+					onDateFilterChange={onDateFilterChange}
+				/>,
+			);
+
+			await screen.getByRole("button", { name: /Filter by date range:/ }).click();
+			await screen.getByRole("button", { name: /August 20.*2026/ }).click();
+
+			expect(onDateFilterChange).toHaveBeenCalledWith({
+				field: "createdAt",
+				from: "",
+				to: "2026-08-20",
+			});
+		});
+
+		it("uses the active admin locale and direction in the calendar", async () => {
+			const previousLocale = i18n.locale;
+			i18n.load("ar", {});
+			i18n.activate("ar");
+
+			try {
+				const screen = await render(
+					<ContentList
+						{...defaultProps}
+						items={[makeItem()]}
+						statusFilter="all"
+						onStatusFilterChange={vi.fn()}
+						dateFilter={{ field: "createdAt", from: "2026-08-18", to: "" }}
+						onDateFilterChange={vi.fn()}
+					/>,
+				);
+
+				await screen.getByRole("button", { name: /Filter by date range:/ }).click();
+				await expect.element(screen.getByText("أغسطس 2026")).toBeInTheDocument();
+				await expect
+					.element(screen.getByRole("button", { name: "اذهب إلى الشهر التالي" }))
+					.toBeInTheDocument();
+				expect(
+					getComputedStyle(screen.getByRole("grid", { name: "أغسطس 2026" }).element()).direction,
+				).toBe("rtl");
+			} finally {
+				i18n.activate(previousLocale);
 			}
 		});
 	});
@@ -543,6 +700,24 @@ describe("ContentList", () => {
 				.toBeInTheDocument();
 		});
 
+		it("keeps the collection label capitalized for a German admin", async () => {
+			const previousLocale = i18n.locale;
+			i18n.load("de", {});
+			i18n.activate("de");
+
+			try {
+				const items = [makeItem({ id: "1", data: { title: "Beitrag" } })];
+				const screen = await render(
+					<ContentList {...defaultProps} collectionLabel="Beiträge" items={items} />,
+				);
+				await expect
+					.element(screen.getByRole("searchbox"))
+					.toHaveAttribute("placeholder", "Search Beiträge...");
+			} finally {
+				i18n.activate(previousLocale);
+			}
+		});
+
 		it("hides search input when no items", async () => {
 			const screen = await render(<ContentList {...defaultProps} items={[]} />);
 			expect(screen.getByRole("searchbox").query()).toBeNull();
@@ -648,6 +823,29 @@ describe("ContentList", () => {
 	});
 
 	describe("pagination", () => {
+		it("explains the bulk tag limit before opening the dialog", async () => {
+			const items = Array.from({ length: 51 }, (_, index) =>
+				makeItem({ id: `item_${index}`, data: { title: `Post ${index}` } }),
+			);
+			const screen = await render(
+				<ContentList
+					{...defaultProps}
+					items={items}
+					bulkTagTaxonomies={[{ name: "tag", label: "Tags", labelSingular: "Tag" }]}
+				/>,
+			);
+			for (let pageIndex = 0; pageIndex < 3; pageIndex++) {
+				await screen.getByRole("checkbox", { name: "Select all on this page" }).click();
+				if (pageIndex < 2) await screen.getByRole("button", { name: "Next page" }).click();
+			}
+			await expect.element(screen.getByRole("button", { name: "Add tag" })).toBeDisabled();
+			await expect
+				.element(screen.getByRole("status"))
+				.toHaveTextContent("Select up to 50 posts at a time.");
+			await screen.getByRole("checkbox", { name: "Select Post 50" }).click();
+			await expect.element(screen.getByRole("button", { name: "Add tag" })).toBeEnabled();
+		});
+
 		it("shows pagination when items exceed page size", async () => {
 			const items = Array.from({ length: 25 }, (_, i) =>
 				makeItem({ id: `item_${i}`, data: { title: `Post ${i}` } }),

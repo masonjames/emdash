@@ -23,6 +23,8 @@ export interface CreateContentInput {
 	primaryBylineId?: string | null;
 	locale?: string;
 	translationOf?: string;
+	/** Field columns selected atomically from `translationOf` during the insert. */
+	inheritFields?: string[];
 	publishedAt?: string | null;
 	/** Override created_at (ISO 8601). Used by importers to preserve original dates. */
 	createdAt?: string | null;
@@ -34,7 +36,10 @@ export interface UpdateContentInput {
 	slug?: string | null;
 	publishedAt?: string | null;
 	scheduledAt?: string | null;
+	/** Entry owner (`ec_{collection}.author_id`). */
 	authorId?: string | null;
+	/** Revision author, separate from entry ownership. */
+	revisionAuthorId?: string | null;
 	primaryBylineId?: string | null;
 }
 
@@ -64,13 +69,14 @@ export interface BylineSummary {
 	avatarMediaId: string | null;
 	/**
 	 * The avatar media's storage key, folded in by a LEFT JOIN on the
-	 * `media` table during content byline hydration. Non-null only when the
-	 * byline has an avatar AND was loaded through the content-credit hydration
-	 * path (`getContentBylines` / `getContentBylinesMany`, i.e. the
-	 * `entry.data.bylines` populated by `getEmDashCollection` / `getEmDashEntry`).
-	 * The plain byline finders (`findById`, `findBySlug`, …) leave it null.
+	 * `media` table. Populated by the content-credit hydration path
+	 * (`getContentBylines` / `getContentBylinesMany`, i.e. the
+	 * `entry.data.bylines` populated by `getEmDashCollection` /
+	 * `getEmDashEntry`) and by the single-row finders (`findById`,
+	 * `findBySlug`, `findByUserId`, `findByUserIds`). `findMany` doesn't
+	 * join media, so it leaves this null.
 	 *
-	 * Lets list pages build a direct storage URL for an author avatar without a
+	 * Lets a page build a direct storage URL for an author avatar without a
 	 * per-byline `MediaRepository.findById`, avoiding an N+1 when many distinct
 	 * authors appear on one page.
 	 *
@@ -86,7 +92,7 @@ export interface BylineSummary {
 	 * same media join as `avatarStorageKey`. Lets a renderer paint a blurred
 	 * placeholder while the full avatar loads, with no extra media lookup.
 	 * Null when the byline has no avatar, the media row has no blurhash, or the
-	 * byline was loaded through a finder that doesn't join media.
+	 * byline came from `findMany`, which doesn't join media.
 	 */
 	avatarBlurhash?: string | null;
 	/**
@@ -230,6 +236,18 @@ export interface FindManyResult<T> {
 	total?: number;
 }
 
+/**
+ * Order value stamped into a cursor over a *staged* reference selection, whose
+ * anchor is a translation group rather than a row in the link table.
+ *
+ * A preview and a public render page the same field from different places, so a
+ * cursor can cross that boundary in either direction — the draft publishes, or
+ * the preview session ends, mid-pagination. Both sides recognise this marker so
+ * they can tell a foreign cursor from a malformed one and restart the field's
+ * page rather than failing or silently emptying it.
+ */
+export const STAGED_CURSOR_MARKER = "staged";
+
 /** Encode a cursor from order value + id */
 export function encodeCursor(orderValue: string, id: string): string {
 	return encodeBase64(JSON.stringify({ orderValue, id }));
@@ -308,6 +326,32 @@ export interface ContentItem {
 	 * revision history.
 	 */
 	liveData?: Record<string, unknown>;
+	/**
+	 * First page of each reference field's resolved selection, keyed by field
+	 * slug. Only populated when the caller opts in via `handleContentGet`'s
+	 * `referenceOptions` param (see content.ts) — hydration is never
+	 * unconditional because it can leak draft ids/slugs to callers without
+	 * `content:read_drafts`.
+	 *
+	 * Shape mirrors `EntryRef` from `api/handlers/relations.ts`, duplicated
+	 * here (rather than imported) so the database layer doesn't depend on
+	 * the api/handlers layer.
+	 */
+	references?: Record<
+		string,
+		{
+			children: Array<{
+				id: string;
+				slug: string | null;
+				collection: string;
+				title: string | null;
+				locale: string | null;
+				translationGroup: string | null;
+				sortOrder?: number;
+			}>;
+			nextCursor?: string;
+		}
+	>;
 }
 
 export class EmDashValidationError extends Error {

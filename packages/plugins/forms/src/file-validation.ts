@@ -3,7 +3,7 @@ import { PluginRouteError } from "emdash";
 export interface SubmissionFileInput {
 	filename: string;
 	contentType: string;
-	bytes: ArrayBuffer;
+	bytes: ArrayBuffer | Uint8Array;
 }
 
 const MAX_FILES = 5;

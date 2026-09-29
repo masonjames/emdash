@@ -2,13 +2,15 @@ import {
 	Badge,
 	Button,
 	Checkbox,
+	DatePicker,
 	Dialog,
-	Input,
 	LinkButton,
 	Loader,
+	Popover,
 	Select,
 	Tabs,
 } from "@cloudflare/kumo";
+import type { DateRange } from "@cloudflare/kumo";
 import { plural } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react/macro";
 import {
@@ -17,11 +19,13 @@ import {
 	Trash,
 	ArrowCounterClockwise,
 	ArrowSquareOut,
+	Calendar,
 	Copy,
-	MagnifyingGlass,
 	CaretUp,
 	CaretDown,
 	CaretUpDown,
+	CircleDashed,
+	Tag,
 	Upload,
 	X,
 } from "@phosphor-icons/react";
@@ -42,10 +46,14 @@ import {
 } from "../lib/content-list-columns.js";
 import { getEntryTitle } from "../lib/entryTitle.js";
 import { useDebouncedValue } from "../lib/hooks.js";
+import { inlineLabel } from "../lib/inline-label.js";
 import { usePluginAdmins } from "../lib/plugin-context.js";
 import { contentUrl } from "../lib/url.js";
 import { cn, parseTimestamp } from "../lib/utils";
+import { getLocaleDir } from "../locales/config.js";
+import { getDayPickerLocale } from "../locales/day-picker.js";
 import { CaretNext, CaretPrev } from "./ArrowIcons.js";
+import { BulkTagDialog, type BulkTagTaxonomy, type SelectedBulkTagPost } from "./BulkTagDialog.js";
 import {
 	BylineFilter,
 	EMPTY_BYLINE_FILTER,
@@ -59,6 +67,7 @@ import {
 } from "./ContentStatusBadge.js";
 import { LocaleSwitcher } from "./LocaleSwitcher";
 import { RouterLinkButton } from "./RouterLinkButton.js";
+import { TableToolbar, TableToolbarSearch } from "./TableToolbar.js";
 
 /**
  * Sortable content list columns. The named values map to the server's system
@@ -114,7 +123,7 @@ export interface ContentListProps {
 	hasMoreTrashed?: boolean;
 	trashedCount?: number;
 	/** i18n config — present when multiple locales are configured */
-	i18n?: { defaultLocale: string; locales: string[] };
+	i18n?: { defaultLocale: string; locales: string[]; prefixDefaultLocale?: boolean };
 	/** Currently active locale filter */
 	activeLocale?: string;
 	/** Callback when locale filter changes */
@@ -176,6 +185,8 @@ export interface ContentListProps {
 	onBulkPublish?: BulkActionHandler;
 	onBulkUnpublish?: BulkActionHandler;
 	onBulkDelete?: BulkActionHandler;
+	/** Taxonomies editors can bulk-assign terms from; empty disables the action. */
+	bulkTagTaxonomies?: BulkTagTaxonomy[];
 	/** Current role used only for contributed-column visibility, not authorization. */
 	userRole?: number;
 	/** Manifest state used to omit disabled or stale trusted-plugin contributions. */
@@ -201,6 +212,24 @@ function parseListDate(value: unknown): Date | null {
 	const normalized = DATE_ONLY_RE.test(value) ? `${value}T00:00:00` : value;
 	const parsed = new Date(normalized);
 	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseDateOnly(value: string): Date | undefined {
+	if (!DATE_ONLY_RE.test(value)) return undefined;
+	const [year, month, day] = value.split("-").map(Number);
+	if (year === undefined || month === undefined || day === undefined) return undefined;
+	const date = new Date(year, month - 1, day);
+	return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+		? date
+		: undefined;
+}
+
+function formatDateOnly(date: Date | undefined): string {
+	if (!date) return "";
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, "0");
+	const day = String(date.getDate()).padStart(2, "0");
+	return `${year}-${month}-${day}`;
 }
 
 /**
@@ -245,19 +274,26 @@ export function ContentList({
 	onBulkPublish,
 	onBulkUnpublish,
 	onBulkDelete,
+	bulkTagTaxonomies = [],
 	userRole = 0,
 	pluginStates,
 }: ContentListProps) {
-	const { t } = useLingui();
+	const { t, i18n: lingui } = useLingui();
 	const pluginAdmins = usePluginAdmins();
 	const [activeTab, setActiveTab] = React.useState<ViewTab>("all");
 	const [searchQuery, setSearchQuery] = React.useState("");
 	const [page, setPage] = React.useState(0);
 	const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
+	const [bulkTagSelection, setBulkTagSelection] = React.useState<SelectedBulkTagPost[] | null>(
+		null,
+	);
+	const [bulkTagOpen, setBulkTagOpen] = React.useState(false);
+	const bulkTagEnabled = bulkTagTaxonomies.length > 0;
+	const soleBulkTagTaxonomy = bulkTagTaxonomies.length === 1 ? bulkTagTaxonomies[0] : undefined;
 
 	// Bulk selection is opt-in: the checkbox column + toolbar only render when
 	// the parent wired at least one bulk handler.
-	const bulkEnabled = !!(onBulkPublish || onBulkUnpublish || onBulkDelete);
+	const bulkEnabled = !!(onBulkPublish || onBulkUnpublish || onBulkDelete || bulkTagEnabled);
 
 	// Server-side search mode: the caller refetches based on the (debounced)
 	// query, so `items`/`total` already reflect the filter and we must not
@@ -382,6 +418,7 @@ export function ContentList({
 	};
 	const colSpan =
 		(i18n ? 5 : 4) + listColumns.length + extensionColumns.length + (bulkEnabled ? 1 : 0);
+	const trashColSpan = i18n ? 4 : 3;
 
 	return (
 		<div className="space-y-4">
@@ -409,21 +446,6 @@ export function ContentList({
 				</RouterLinkButton>
 			</div>
 
-			{/* Search */}
-			{(serverSearch || items.length > 0) && (
-				<div className="relative max-w-sm">
-					<MagnifyingGlass className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-kumo-subtle" />
-					<Input
-						type="search"
-						placeholder={t`Search ${collectionLabel.toLowerCase()}...`}
-						aria-label={t`Search ${collectionLabel.toLowerCase()}`}
-						value={searchQuery}
-						onChange={handleSearchChange}
-						className="ps-9"
-					/>
-				</div>
-			)}
-
 			{/* Tabs */}
 			<Tabs
 				variant="underline"
@@ -449,20 +471,31 @@ export function ContentList({
 			{/* Content based on active tab */}
 			{activeTab === "all" ? (
 				<>
-					{/* Filters */}
-					{onStatusFilterChange && (
-						<FilterBar
-							statusFilter={statusFilter}
-							onStatusFilterChange={onStatusFilterChange}
-							authors={authors}
-							authorFilter={authorFilter}
-							onAuthorFilterChange={onAuthorFilterChange}
-							dateFilter={dateFilter}
-							onDateFilterChange={onDateFilterChange}
-							bylineFilter={bylineFilter}
-							onBylineFilterChange={onBylineFilterChange}
-							locale={activeLocale ?? undefined}
-						/>
+					{(serverSearch || items.length > 0 || onStatusFilterChange) && (
+						<TableToolbar>
+							{(serverSearch || items.length > 0) && (
+								<TableToolbarSearch
+									placeholder={t`Search ${inlineLabel(collectionLabel, lingui.locale)}...`}
+									aria-label={t`Search ${inlineLabel(collectionLabel, lingui.locale)}`}
+									value={searchQuery}
+									onChange={handleSearchChange}
+								/>
+							)}
+							{onStatusFilterChange && (
+								<FilterBar
+									statusFilter={statusFilter}
+									onStatusFilterChange={onStatusFilterChange}
+									authors={authors}
+									authorFilter={authorFilter}
+									onAuthorFilterChange={onAuthorFilterChange}
+									dateFilter={dateFilter}
+									onDateFilterChange={onDateFilterChange}
+									bylineFilter={bylineFilter}
+									onBylineFilterChange={onBylineFilterChange}
+									locale={activeLocale ?? undefined}
+								/>
+							)}
+						</TableToolbar>
 					)}
 
 					{/* Bulk action toolbar — appears once one or more rows are selected */}
@@ -491,9 +524,41 @@ export function ContentList({
 										variant="secondary"
 										disabled={bulkBusy}
 										onClick={() => runBulk(onBulkUnpublish)}
+										icon={<CircleDashed aria-hidden="true" />}
 									>
 										{t`Set to draft`}
 									</Button>
+								)}
+								{bulkTagEnabled && (
+									<Button
+										size="sm"
+										variant="secondary"
+										disabled={bulkBusy || selectedCount > 50}
+										icon={<Tag aria-hidden="true" />}
+										onClick={() => {
+											setBulkTagSelection(
+												Array.from(selectedIds, (id) => {
+													const item = items.find((candidate) => candidate.id === id);
+													return {
+														collection,
+														id,
+														title: item ? getEntryTitle(item, titleField) : id,
+														locale: item?.locale,
+													};
+												}),
+											);
+											setBulkTagOpen(true);
+										}}
+									>
+										{soleBulkTagTaxonomy
+											? t`Add ${inlineLabel(soleBulkTagTaxonomy.labelSingular || soleBulkTagTaxonomy.label, lingui.locale)}`
+											: t`Add term`}
+									</Button>
+								)}
+								{bulkTagEnabled && selectedCount > 50 && (
+									<span role="status" className="text-sm text-kumo-danger">
+										{t`Select up to 50 posts at a time.`}
+									</span>
 								)}
 								{onBulkDelete && (
 									<Dialog.Root disablePointerDismissal>
@@ -553,6 +618,27 @@ export function ContentList({
 							</div>
 						</div>
 					)}
+					<BulkTagDialog
+						taxonomies={bulkTagTaxonomies}
+						open={bulkTagOpen}
+						selected={bulkTagSelection ?? undefined}
+						activeLocale={activeLocale}
+						defaultLocale={i18n?.defaultLocale}
+						onClose={() => setBulkTagOpen(false)}
+						onClosed={() => setBulkTagSelection(null)}
+						onApplied={(results) => {
+							setSelectedIds(
+								new Set(
+									results.flatMap((result) =>
+										(result.status === "failed" || result.status === "unmatched") &&
+										"id" in result.input
+											? [result.input.id]
+											: [],
+									),
+								),
+							);
+						}}
+					/>
 
 					{/* Table */}
 					<div className="rounded-md border bg-kumo-base overflow-x-auto">
@@ -635,7 +721,7 @@ export function ContentList({
 												t`No results for "${activeSearch}"`
 											) : (
 												<>
-													{t`No ${collectionLabel.toLowerCase()} yet.`}{" "}
+													{t`No ${inlineLabel(collectionLabel, lingui.locale)} yet.`}{" "}
 													<Link
 														to="/content/$collection/new"
 														params={{ collection }}
@@ -664,6 +750,7 @@ export function ContentList({
 											onDelete={onDelete}
 											onDuplicate={onDuplicate}
 											showLocale={!!i18n}
+											i18n={i18n}
 											urlPattern={urlPattern}
 											titleField={titleField}
 											dateField={dateField}
@@ -736,6 +823,11 @@ export function ContentList({
 									<th scope="col" className="px-4 py-3 text-start text-sm font-medium">
 										{t`Title`}
 									</th>
+									{i18n && (
+										<th scope="col" className="px-4 py-3 text-start text-sm font-medium">
+											{t`Locale`}
+										</th>
+									)}
 									<th scope="col" className="px-4 py-3 text-start text-sm font-medium">
 										{t`Deleted`}
 									</th>
@@ -747,7 +839,7 @@ export function ContentList({
 							<tbody className="divide-y divide-kumo-line">
 								{isTrashedLoading && trashedItems.length === 0 ? (
 									<tr>
-										<td colSpan={3} className="px-4 py-8 text-center text-kumo-subtle">
+										<td colSpan={trashColSpan} className="px-4 py-8 text-center text-kumo-subtle">
 											<span className="inline-flex items-center gap-2">
 												<Loader size="sm" />
 												{t`Loading...`}
@@ -756,7 +848,7 @@ export function ContentList({
 									</tr>
 								) : trashedItems.length === 0 ? (
 									<tr>
-										<td colSpan={3} className="px-4 py-8 text-center text-kumo-subtle">
+										<td colSpan={trashColSpan} className="px-4 py-8 text-center text-kumo-subtle">
 											{t`Trash is empty`}
 										</td>
 									</tr>
@@ -766,6 +858,7 @@ export function ContentList({
 											key={item.id}
 											item={item}
 											titleField={titleField}
+											showLocale={!!i18n}
 											onRestore={onRestore}
 											onPermanentDelete={onPermanentDelete}
 										/>
@@ -863,9 +956,10 @@ function FilterBar({
 	};
 
 	return (
-		<div className="flex flex-wrap items-end gap-3">
+		<>
 			<Select
 				size="sm"
+				className="emdash-status-filter-trigger min-w-32 ps-3.5"
 				aria-label={t`Filter by status`}
 				value={statusFilter}
 				onValueChange={(v) => onStatusFilterChange((v as ContentStatusFilter) ?? "all")}
@@ -875,7 +969,7 @@ function FilterBar({
 				items={statusItems}
 			>
 				{Object.entries(statusItems).map(([value]) => (
-					<Select.Option key={value} value={value}>
+					<Select.Option key={value} value={value} className="emdash-compact-select-option text-xs">
 						{renderStatusLabel(value as ContentStatusFilter)}
 					</Select.Option>
 				))}
@@ -906,9 +1000,10 @@ function FilterBar({
 			)}
 
 			{showDateFilter && (
-				<div className="flex flex-wrap items-end gap-2">
+				<>
 					<Select
 						size="sm"
+						className="emdash-date-field-filter-trigger min-w-28 ps-3.5"
 						aria-label={t`Date field to filter on`}
 						value={dateFilter.field}
 						onValueChange={(v) =>
@@ -917,29 +1012,17 @@ function FilterBar({
 						items={dateFieldItems}
 					>
 						{Object.entries(dateFieldItems).map(([value, label]) => (
-							<Select.Option key={value} value={value}>
+							<Select.Option
+								key={value}
+								value={value}
+								className="emdash-compact-select-option text-xs"
+							>
 								{label}
 							</Select.Option>
 						))}
 					</Select>
-					<Input
-						type="date"
-						size="sm"
-						aria-label={t`From date`}
-						value={dateFilter.from}
-						max={dateFilter.to || undefined}
-						onChange={(e) => onDateFilterChange?.({ ...dateFilter, from: e.target.value })}
-					/>
-					<span className="pb-2 text-sm text-kumo-subtle">{t`to`}</span>
-					<Input
-						type="date"
-						size="sm"
-						aria-label={t`To date`}
-						value={dateFilter.to}
-						min={dateFilter.from || undefined}
-						onChange={(e) => onDateFilterChange?.({ ...dateFilter, to: e.target.value })}
-					/>
-				</div>
+					<DateRangeFilter value={dateFilter} onChange={onDateFilterChange} />
+				</>
 			)}
 
 			{hasActiveFilter && (
@@ -947,7 +1030,110 @@ function FilterBar({
 					{t`Clear filters`}
 				</Button>
 			)}
-		</div>
+		</>
+	);
+}
+
+function DateRangeFilter({
+	value,
+	onChange,
+}: {
+	value: ContentDateFilter;
+	onChange: (filter: ContentDateFilter) => void;
+}) {
+	const { i18n, t } = useLingui();
+	const from = parseDateOnly(value.from);
+	const to = parseDateOnly(value.to);
+	const formatter = React.useMemo(
+		() => new Intl.DateTimeFormat(i18n.locale, { dateStyle: "medium" }),
+		[i18n.locale],
+	);
+	const rangeLabel = from
+		? to
+			? formatter.formatRange(from, to)
+			: t`From ${formatter.format(from)}`
+		: to
+			? t`Until ${formatter.format(to)}`
+			: t`Date range`;
+	const selected: DateRange | undefined = from ? { from, to } : to ? { from: to, to } : undefined;
+	const dayPickerLocale = getDayPickerLocale(i18n.locale);
+	const direction = getLocaleDir(i18n.locale);
+	const isUpperBoundOnly = !from && !!to;
+	const canUseAsEndDate = !!from && (!to || value.from === value.to);
+
+	const handleChange = (range: DateRange | undefined, triggerDate?: Date) => {
+		if (isUpperBoundOnly && triggerDate) {
+			onChange({
+				...value,
+				from: "",
+				to: formatDateOnly(triggerDate),
+			});
+			return;
+		}
+		onChange({
+			...value,
+			from: formatDateOnly(range?.from),
+			to: formatDateOnly(range?.to),
+		});
+	};
+	const handleUseAsEndDate = () => {
+		if (!from || !canUseAsEndDate) return;
+		onChange({
+			...value,
+			from: "",
+			to: formatDateOnly(from),
+		});
+	};
+
+	return (
+		<Popover>
+			<Popover.Trigger
+				render={
+					<Button
+						variant="secondary"
+						size="sm"
+						icon={
+							<span
+								className="emdash-date-range-icon flex size-3 shrink-0 items-center justify-center"
+								aria-hidden="true"
+							>
+								<Calendar className="size-3" />
+							</span>
+						}
+						aria-label={t`Filter by date range: ${rangeLabel}`}
+						className="emdash-date-range-trigger px-3.5 font-normal"
+					/>
+				}
+			>
+				<span className="emdash-date-range-label">{rangeLabel}</span>
+			</Popover.Trigger>
+			<Popover.Content align="start" className="w-auto px-3 py-2.5">
+				<Popover.Title className="text-sm font-medium">{t`Choose a date range`}</Popover.Title>
+				<DatePicker
+					mode="range"
+					selected={selected}
+					defaultMonth={from ?? to}
+					onChange={handleChange}
+					aria-label={t`Choose a date range`}
+					className="mt-1"
+					locale={dayPickerLocale}
+					dir={direction}
+				/>
+				<div className="mt-1 flex flex-wrap items-center justify-end gap-2 border-t border-kumo-line pt-2">
+					{(from || to) && (
+						<Button size="sm" variant="ghost" onClick={() => handleChange(undefined)}>
+							{t`Clear`}
+						</Button>
+					)}
+					{canUseAsEndDate && (
+						<Button size="sm" variant="ghost" onClick={handleUseAsEndDate}>
+							{t`Use as end date`}
+						</Button>
+					)}
+					<Popover.Close render={<Button size="sm" variant="secondary" />}>{t`Done`}</Popover.Close>
+				</div>
+			</Popover.Content>
+		</Popover>
 	);
 }
 
@@ -1098,6 +1284,7 @@ interface ContentListItemProps {
 	onDelete?: (id: string) => void;
 	onDuplicate?: (id: string) => void;
 	showLocale?: boolean;
+	i18n?: { defaultLocale: string; locales: string[]; prefixDefaultLocale?: boolean };
 	urlPattern?: string;
 	titleField?: string;
 	dateField?: string;
@@ -1115,6 +1302,7 @@ function ContentListItem({
 	onDelete,
 	onDuplicate,
 	showLocale,
+	i18n,
 	urlPattern,
 	titleField,
 	dateField,
@@ -1201,7 +1389,12 @@ function ContentListItem({
 				<div className="flex items-center justify-end space-x-1">
 					{item.status === "published" && item.slug && (
 						<LinkButton
-							href={contentUrl(collection, item.slug, urlPattern)}
+							href={contentUrl(collection, item.slug, urlPattern, {
+								locale: item.locale,
+								i18n,
+								id: item.id,
+								date: item.publishedAt,
+							})}
 							external
 							variant="ghost"
 							shape="square"
@@ -1367,11 +1560,18 @@ function scalarListColumnValue(value: unknown): string | undefined {
 interface TrashedListItemProps {
 	item: TrashedContentItem;
 	titleField?: string;
+	showLocale?: boolean;
 	onRestore?: (id: string) => void;
 	onPermanentDelete?: (id: string) => void;
 }
 
-function TrashedListItem({ item, titleField, onRestore, onPermanentDelete }: TrashedListItemProps) {
+function TrashedListItem({
+	item,
+	titleField,
+	showLocale,
+	onRestore,
+	onPermanentDelete,
+}: TrashedListItemProps) {
 	const { t } = useLingui();
 	const title = getEntryTitle(item, titleField);
 	const deletedDate = parseTimestamp(item.deletedAt);
@@ -1381,6 +1581,13 @@ function TrashedListItem({ item, titleField, onRestore, onPermanentDelete }: Tra
 			<td className="px-4 py-3">
 				<span className="font-medium text-kumo-subtle">{title}</span>
 			</td>
+			{showLocale && (
+				<td className="px-4 py-3">
+					<span className="bg-kumo-tint rounded px-1.5 py-0.5 text-xs font-semibold uppercase">
+						{item.locale}
+					</span>
+				</td>
+			)}
 			<td className="px-4 py-3 text-sm text-kumo-subtle">{deletedDate.toLocaleDateString()}</td>
 			<td className="px-4 py-3 text-end">
 				<div className="flex items-center justify-end space-x-1">

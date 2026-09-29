@@ -9,7 +9,18 @@ import type { Element } from "@emdash-cms/blocks";
 import type { Kysely } from "kysely";
 
 import type { ContentFieldFilters } from "../content-list-query.js";
-import type { RouteCallerInput, RouteMeta } from "../plugins/routes.js";
+import type {
+	PluginEditorExtensionDispatch,
+	ResolvedPluginEditorExtension,
+} from "../emdash-runtime.js";
+import type {
+	PluginContentCacheInvalidator,
+	RouteCallerInput,
+	RouteMeta,
+} from "../plugins/routes.js";
+import type { ActorInfo, ContentActionOrigin } from "../plugins/types.js";
+import type { ManifestRegistryConfigurationError } from "../registry/config.js";
+import type { CollectionWithFields } from "../schema/types.js";
 
 // Re-export core types
 export type {
@@ -37,11 +48,20 @@ export interface ManifestCollection {
 	titleField?: string;
 	dateField?: string;
 	/**
-	 * Omit the auto-generated sidebar entry in the admin. The collection is
-	 * still listed in the manifest so its routes, editor, and API keep working
-	 * — only the navigation link is dropped.
+	 * Omit the auto-generated sidebar entry and dashboard quick action in the
+	 * admin. The collection is still listed in the manifest so its routes,
+	 * editor, and API keep working.
 	 */
 	hidden?: boolean;
+	/** Phosphor icon name for the sidebar entry (kebab-case, e.g. `calendar-blank`). */
+	icon?: string;
+	/**
+	 * Sidebar folder. Collections sharing a group render under one collapsible
+	 * entry labelled with the group.
+	 */
+	group?: string;
+	/** `false` omits the dashboard's "new entry" quick action. */
+	quickCreate?: boolean;
 	/** Valid custom field slugs to render in the admin content list. */
 	listColumns?: string[];
 	fields: Record<
@@ -50,6 +70,7 @@ export interface ManifestCollection {
 			kind: string;
 			label?: string;
 			required?: boolean;
+			translatable?: boolean;
 			widget?: string;
 			/**
 			 * Field options. Two shapes:
@@ -92,6 +113,8 @@ export interface ManifestPlugin {
 		title?: string;
 		size?: string;
 	}>;
+	editorPanels?: import("../plugins/types.js").PluginEditorPanel[];
+	editorActions?: import("../plugins/types.js").PluginEditorAction[];
 	fieldWidgets?: Array<{
 		name: string;
 		label: string;
@@ -129,6 +152,8 @@ export interface EmDashManifest {
 	 * registry plugin's `env:astro` requirement against the running host.
 	 */
 	astroVersion?: string;
+	/** IANA timezone used by datetime-local controls in the admin. */
+	timezone?: string;
 	collections: Record<string, ManifestCollection>;
 	plugins: Record<string, ManifestPlugin>;
 	/**
@@ -171,13 +196,13 @@ export interface EmDashManifest {
 	}>;
 	/**
 	 * Whether the plugin marketplace is configured.
-	 * When true, the admin UI can show marketplace browse/install features.
-	 *
-	 * When `registry` is also present, the registry replaces the marketplace
-	 * for the admin UI's browse and install flows. Existing marketplace-installed
-	 * plugins continue to work; new installs and updates use the registry.
+	 * When true, the admin shows migration guidance and keeps legacy installed
+	 * plugins updateable and uninstallable. It does not expose marketplace
+	 * browse or install flows.
 	 */
 	marketplace?: boolean;
+	/** Whether a sandbox runner is enabled for installing and running sandboxed plugins. */
+	sandboxEnabled?: boolean;
 	/**
 	 * Decentralized plugin registry configuration.
 	 *
@@ -209,6 +234,8 @@ export interface EmDashManifest {
 			minimumReleaseAgeExclude?: string[];
 		};
 	};
+	/** Safe field-level diagnostic when the registry configuration cannot be normalized. */
+	registryConfigurationError?: ManifestRegistryConfigurationError;
 	/**
 	 * Admin branding overrides for white-labeling.
 	 * Set via the `admin` config in `astro.config.mjs`.
@@ -216,6 +243,7 @@ export interface EmDashManifest {
 	admin?: {
 		logo?: string;
 		siteName?: string;
+		footerLabel?: string | false;
 		favicon?: string;
 	};
 }
@@ -246,6 +274,15 @@ export interface HandlerResponse<T = unknown> {
  * handleContentGet, handleRevisionGet) use narrower types.
  */
 export interface EmDashHandlers {
+	// Comment administration
+	handleCommentModerate?: (
+		id: string,
+		status: "pending" | "approved" | "spam" | "trash",
+		moderator: { id: string; name: string | null },
+		expectedStatus?: "pending" | "approved" | "spam" | "trash",
+		request?: Request,
+	) => Promise<unknown>;
+
 	// Content handlers
 	handleContentList: (
 		collection: string,
@@ -274,6 +311,7 @@ export interface EmDashHandlers {
 		collection: string,
 		id: string,
 		locale?: string,
+		referenceOptions?: { includeDrafts: boolean },
 	) => Promise<
 		HandlerResponse<{
 			item: {
@@ -296,8 +334,12 @@ export interface EmDashHandlers {
 			locale?: string;
 			translationOf?: string;
 			taxonomies?: Record<string, string[]>;
+			references?: Record<string, string[]>;
 			createdAt?: string | null;
 			publishedAt?: string | null;
+			migrateBlocks?: boolean;
+			replaceBlocks?: boolean;
+			actor?: { id: string; role: number };
 		},
 	) => Promise<HandlerResponse>;
 
@@ -319,8 +361,12 @@ export interface EmDashHandlers {
 				noIndex?: boolean;
 			};
 			taxonomies?: Record<string, string[]>;
+			references?: Record<string, string[]>;
 			publishedAt?: string | null;
 			_rev?: string;
+			migrateBlocks?: boolean;
+			replaceBlocks?: boolean;
+			actor?: { id: string; role: number };
 		},
 	) => Promise<HandlerResponse>;
 
@@ -329,14 +375,17 @@ export interface EmDashHandlers {
 	// Trash handlers
 	handleContentListTrashed: (
 		collection: string,
-		params?: { cursor?: string; limit?: number },
+		params?: { cursor?: string; limit?: number; locale?: string },
 	) => Promise<HandlerResponse>;
 
 	handleContentRestore: (collection: string, id: string) => Promise<HandlerResponse>;
 
 	handleContentPermanentDelete: (collection: string, id: string) => Promise<HandlerResponse>;
 
-	handleContentCountTrashed: (collection: string) => Promise<HandlerResponse>;
+	handleContentCountTrashed: (
+		collection: string,
+		params?: { locale?: string },
+	) => Promise<HandlerResponse>;
 
 	handleContentGetIncludingTrashed: (collection: string, id: string) => Promise<HandlerResponse>;
 
@@ -350,22 +399,43 @@ export interface EmDashHandlers {
 	handleContentPublish: (
 		collection: string,
 		id: string,
-		options?: { publishedAt?: string; requireScheduledDue?: boolean },
+		options?: {
+			publishedAt?: string;
+			requireScheduledDue?: boolean;
+			expectedScheduledAt?: string;
+			_rev?: string;
+			currentTime?: Date;
+			actor?: ActorInfo;
+			origin?: ContentActionOrigin;
+		},
 	) => Promise<HandlerResponse>;
 
-	handleContentUnpublish: (collection: string, id: string) => Promise<HandlerResponse>;
+	handleContentUnpublish: (
+		collection: string,
+		id: string,
+		options?: { _rev?: string; actor?: ActorInfo; origin?: ContentActionOrigin },
+	) => Promise<HandlerResponse>;
 
 	handleContentSchedule: (
 		collection: string,
 		id: string,
 		scheduledAt: string,
+		options?: { _rev?: string; actor?: ActorInfo; origin?: ContentActionOrigin },
 	) => Promise<HandlerResponse>;
 
-	handleContentUnschedule: (collection: string, id: string) => Promise<HandlerResponse>;
+	handleContentUnschedule: (
+		collection: string,
+		id: string,
+		options?: { _rev?: string },
+	) => Promise<HandlerResponse>;
 
 	handleContentCountScheduled: (collection: string) => Promise<HandlerResponse>;
 
-	handleContentDiscardDraft: (collection: string, id: string) => Promise<HandlerResponse>;
+	handleContentDiscardDraft: (
+		collection: string,
+		id: string,
+		options?: { _rev?: string },
+	) => Promise<HandlerResponse>;
 
 	handleContentCompare: (collection: string, id: string) => Promise<HandlerResponse>;
 
@@ -374,11 +444,24 @@ export interface EmDashHandlers {
 	// Media handlers
 	handleMediaList: (params: {
 		cursor?: string;
+		page?: number;
 		limit?: number;
 		mimeType?: string | readonly string[];
+		folderId?: string | null;
 	}) => Promise<HandlerResponse>;
 
 	handleMediaGet: (id: string) => Promise<HandlerResponse>;
+
+	handleMediaUpload: (input: {
+		filename: string;
+		base64?: string;
+		url?: string;
+		contentType?: string;
+		alt?: string;
+		caption?: string;
+		authorId?: string;
+		maxUploadSize?: number;
+	}) => Promise<HandlerResponse>;
 
 	handleMediaCreate: (input: {
 		filename: string;
@@ -391,11 +474,31 @@ export interface EmDashHandlers {
 		blurhash?: string;
 		dominantColor?: string;
 		authorId?: string;
+		folderId?: string | null;
+	}) => Promise<HandlerResponse>;
+
+	handleMediaRegisterUpload: (input: {
+		storageKey: string;
+		authorId?: string;
 	}) => Promise<HandlerResponse>;
 
 	handleMediaUpdate: (
 		id: string,
-		input: { alt?: string; caption?: string; width?: number; height?: number },
+		input: {
+			alt?: string;
+			caption?: string;
+			width?: number;
+			height?: number;
+			folderId?: string | null;
+			focalX?: number | null;
+			focalY?: number | null;
+		},
+	) => Promise<HandlerResponse>;
+
+	handleMediaReplaceMetadata?: (
+		id: string,
+		expectedStorageKey: string,
+		input: { size: number; width: number; height: number; contentHash: string },
 	) => Promise<HandlerResponse>;
 
 	handleMediaDelete: (id: string) => Promise<HandlerResponse>;
@@ -429,7 +532,16 @@ export interface EmDashHandlers {
 		path: string,
 		request: Request,
 		user?: RouteCallerInput | null,
+		invalidateContentCache?: PluginContentCacheInvalidator,
+		editorDispatch?: PluginEditorExtensionDispatch,
 	) => Promise<HandlerResponse>;
+	getPluginEditorExtension: (
+		pluginId: string,
+		kind: "panel" | "action",
+		extensionId: string,
+		collection: string,
+	) => ResolvedPluginEditorExtension | null;
+	getPluginEditorDraftSchema: (collection: string) => Promise<CollectionWithFields | null>;
 
 	// Public-only plugin API route handler for SSR page components.
 	handlePublicPluginApiRoute: (
@@ -477,6 +589,7 @@ export interface EmDashHandlers {
 		actorId: string,
 		request: Request,
 		caller?: RouteCallerInput | null,
+		invalidateContentCache?: PluginContentCacheInvalidator,
 	) => Promise<HandlerResponse>;
 	handlePluginMcpDenied: (
 		pluginId: string,
@@ -539,6 +652,12 @@ export interface EmDashHandlers {
 
 	// Sync registry plugin states (after install/update/uninstall)
 	syncRegistryPlugins: () => Promise<void>;
+	// Run install and activation hooks after the runtime loads a new plugin.
+	runPluginInstallLifecycle: (pluginId: string) => Promise<void>;
+	runPluginActivateLifecycle: (pluginId: string) => Promise<void>;
+	runPluginUninstallLifecycle: (pluginId: string, deleteData: boolean) => Promise<void>;
+	// Read settings metadata for runtime-installed plugins.
+	getRuntimePluginSettingsSchema: (pluginId: string) => Record<string, unknown> | null;
 
 	// Update plugin enabled/disabled status and rebuild hook pipeline
 	setPluginStatus: (pluginId: string, status: "active" | "inactive") => Promise<void>;

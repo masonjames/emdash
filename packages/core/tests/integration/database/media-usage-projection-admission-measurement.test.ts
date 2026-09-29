@@ -1,6 +1,7 @@
-import Database from "better-sqlite3";
 import { Kysely, SqliteDialect, sql } from "kysely";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+
+import { NodeSqliteCompatDatabase as Database } from "#node-sqlite";
 
 vi.mock(
 	"virtual:emdash/object-cache",
@@ -44,7 +45,7 @@ interface MeasurementRow extends Measurement {
 	payloadBytes?: number;
 }
 
-let sqlite: Database.Database;
+let sqlite: Database;
 let db: Kysely<DatabaseSchema>;
 let captured: CapturedQuery[];
 let fixture: Awaited<ReturnType<typeof createActiveFixture>>;
@@ -70,7 +71,7 @@ afterAll(async () => {
 	await db.destroy();
 });
 
-it("reports current projection costs at occurrence and byte boundaries", async () => {
+it("reports representative projection costs below the approved boundary", async () => {
 	const rows: MeasurementRow[] = [];
 	for (const totalOccurrences of [0, 1, 3, 4, 6, 9, 12, 15, 18, 21, 24, 27, 30]) {
 		for (const [liveOccurrences, draftOccurrences] of candidateSplits(totalOccurrences)) {
@@ -83,8 +84,7 @@ it("reports current projection costs at occurrence and byte boundaries", async (
 			const result = await measure(() =>
 				processMediaUsageWorkAfterWrite(db, fixture.collectionSlug, contentId),
 			);
-			const expectedOutcome = totalOccurrences <= 12 ? "completed" : "failed";
-			expect(result.value.outcome).toBe(expectedOutcome);
+			expect(result.value.outcome).toBe("completed");
 			rows.push({
 				path: "processor",
 				totalOccurrences,
@@ -102,8 +102,7 @@ it("reports current projection costs at occurrence and byte boundaries", async (
 		const result = await measure(() =>
 			processMediaUsageWorkAfterWrite(db, fixture.collectionSlug, contentId),
 		);
-		const expectedOutcome = payloadBytes < 512 * 1024 ? "completed" : "failed";
-		expect(result.value.outcome).toBe(expectedOutcome);
+		expect(result.value.outcome).toBe("completed");
 		rows.push({
 			path: "processor-bytes",
 			totalOccurrences: 0,
@@ -127,7 +126,7 @@ it("reports current projection costs at occurrence and byte boundaries", async (
 		expect(created.value.success).toBe(true);
 		if (!created.value.success) throw new Error(created.value.error.message);
 		const createOutcome = await workOutcome(created.value.data.item.id);
-		expect(createOutcome).toBe(totalOccurrences <= 12 ? "completed" : "failed");
+		expect(createOutcome).toBe("completed");
 		rows.push({
 			path: "runtime-create",
 			totalOccurrences,
@@ -154,9 +153,7 @@ it("reports current projection costs at occurrence and byte boundaries", async (
 			);
 			expect(updated.value.success).toBe(true);
 			const updateOutcome = await workOutcome(initial.data.item.id);
-			expect(updateOutcome).toBe(
-				liveOccurrences <= 12 && draftOccurrences <= 12 ? "completed" : "failed",
-			);
+			expect(updateOutcome).toBe("completed");
 			rows.push({
 				path: "runtime-update",
 				totalOccurrences,

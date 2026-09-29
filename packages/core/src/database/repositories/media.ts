@@ -1,6 +1,14 @@
-import { sql, type ExpressionBuilder, type Kysely, type SqlBool } from "kysely";
+import {
+	sql,
+	type ExpressionBuilder,
+	type Kysely,
+	type SelectQueryBuilder,
+	type SqlBool,
+} from "kysely";
 import { ulid } from "ulidx";
 
+import { normalizeFocalPoint, type FocalPointUpdate } from "../../media/focal-point.js";
+import { chunks, SQL_BATCH_SIZE } from "../../utils/chunks.js";
 import type { Database, MediaRow } from "../types.js";
 import type { FindManyResult } from "./types.js";
 import { encodeCursor, decodeCursor } from "./types.js";
@@ -22,6 +30,11 @@ function normalizeMimeFilter(input?: string | readonly string[]): string[] {
 		.map((entry) =>
 			entry.endsWith("/") ? entry.toLowerCase() : entry.split(";")[0].trim().toLowerCase(),
 		);
+}
+
+function normalizeListLimit(limit: unknown): number {
+	const integer = typeof limit === "number" && !Number.isNaN(limit) ? Math.trunc(limit) : 50;
+	return Math.min(Math.max(integer, 1), 100);
 }
 
 /**
@@ -49,6 +62,8 @@ export interface MediaItem {
 	size: number | null;
 	width: number | null;
 	height: number | null;
+	focalX: number | null;
+	focalY: number | null;
 	alt: string | null;
 	caption: string | null;
 	storageKey: string;
@@ -59,6 +74,7 @@ export interface MediaItem {
 	createdAt: string;
 	authorId: string | null;
 	visibility: MediaVisibility;
+	folderId?: string | null;
 }
 
 export interface CreateMediaInput {
@@ -76,6 +92,7 @@ export interface CreateMediaInput {
 	status?: MediaStatus;
 	authorId?: string;
 	visibility?: MediaVisibility;
+	folderId?: string | null;
 }
 
 export interface FindManyMediaOptions {
@@ -87,6 +104,32 @@ export interface FindManyMediaOptions {
 	/** Case-insensitive substring matched against the filename (covers filename and extension). */
 	q?: string;
 	visibility?: MediaVisibility | "all";
+	/** Omit for all media, pass null for the Main library, or pass a folder ID. */
+	folderId?: string | null;
+}
+
+export interface UpdateMediaInput extends FocalPointUpdate {
+	alt?: string | null;
+	caption?: string | null;
+	width?: number;
+	height?: number;
+	folderId?: string | null;
+}
+
+export interface ReplaceReadyMediaInput {
+	size: number;
+	width: number;
+	height: number;
+	contentHash: string;
+}
+
+export interface FindMediaPageOptions extends Omit<FindManyMediaOptions, "cursor"> {
+	page: number;
+}
+
+export interface MediaPageResult {
+	items: MediaItem[];
+	totalCount: number;
 }
 
 const UPLOAD_ATTEMPT_CLEANUP_AGE_MS = 60 * 60 * 1000;
@@ -112,6 +155,8 @@ export class MediaRepository {
 			size: input.size ?? null,
 			width: input.width ?? null,
 			height: input.height ?? null,
+			focal_x: null,
+			focal_y: null,
 			alt: input.alt ?? null,
 			caption: input.caption ?? null,
 			storage_key: input.storageKey,
@@ -122,6 +167,7 @@ export class MediaRepository {
 			created_at: now,
 			author_id: input.authorId ?? null,
 			visibility: input.visibility ?? "public",
+			folder_id: input.folderId ?? null,
 		};
 
 		await this.db.insertInto("media").values(row).execute();
@@ -139,6 +185,7 @@ export class MediaRepository {
 		storageKey: string;
 		contentHash?: string;
 		authorId?: string;
+		folderId?: string | null;
 	}): Promise<MediaItem> {
 		return this.create({
 			...input,
@@ -157,6 +204,28 @@ export class MediaRepository {
 				created_at: now,
 				updated_at: now,
 			})
+			.execute();
+	}
+
+	/**
+	 * Register a stored object for cleanup before its media row is removed,
+	 * so a failed storage delete is retried by the cleanup sweep instead of
+	 * leaving the object unreferenced and unreachable.
+	 */
+	async trackStorageKeyForCleanup(mediaId: string, storageKey: string): Promise<void> {
+		const now = new Date().toISOString();
+		await this.db
+			.insertInto("_emdash_media_upload_attempts")
+			.values({
+				media_id: mediaId,
+				storage_key: storageKey,
+				status: "cleanup",
+				created_at: now,
+				updated_at: now,
+			})
+			.onConflict((oc) =>
+				oc.column("storage_key").doUpdateSet({ status: "cleanup", updated_at: now }),
+			)
 			.execute();
 	}
 
@@ -196,9 +265,18 @@ export class MediaRepository {
 			.execute();
 	}
 
+	async deferUploadAttemptCleanup(storageKey: string): Promise<void> {
+		await this.db
+			.updateTable("_emdash_media_upload_attempts")
+			.set({ updated_at: new Date().toISOString() })
+			.where("storage_key", "=", storageKey)
+			.execute();
+	}
+
 	async deleteCompletedUploadAttempts(): Promise<number> {
 		const result = await this.db
 			.deleteFrom("_emdash_media_upload_attempts")
+			.where("status", "=", "active")
 			.where((eb) =>
 				eb.exists(
 					eb
@@ -232,7 +310,7 @@ export class MediaRepository {
 					),
 				),
 			)
-			.orderBy("created_at", "asc")
+			.orderBy("updated_at", "asc")
 			.limit(limit)
 			.execute();
 
@@ -322,6 +400,20 @@ export class MediaRepository {
 	}
 
 	/**
+	 * Find the pending media row minted for a signed upload URL.
+	 */
+	async findPendingByStorageKey(storageKey: string): Promise<MediaItem | null> {
+		const row = await this.db
+			.selectFrom("media")
+			.selectAll()
+			.where("storage_key", "=", storageKey)
+			.where("status", "=", "pending")
+			.executeTakeFirst();
+
+		return row ? this.rowToItem(row) : null;
+	}
+
+	/**
 	 * Find media by ID
 	 */
 	async findById(id: string): Promise<MediaItem | null> {
@@ -348,6 +440,30 @@ export class MediaRepository {
 		return row ? this.rowToItem(row) : null;
 	}
 
+	async findAvailableFilename(filename: string): Promise<string> {
+		const exists = async (candidate: string) =>
+			Boolean(
+				await this.db
+					.selectFrom("media")
+					.select("id")
+					.where(sql<string>`lower(filename)`, "=", candidate.toLowerCase())
+					.executeTakeFirst(),
+			);
+		if (!(await exists(filename))) return filename;
+
+		const extensionIndex = filename.lastIndexOf(".");
+		const hasExtension = extensionIndex > 0;
+		const extension = hasExtension ? filename.slice(extensionIndex) : "";
+		const stem = hasExtension ? filename.slice(0, extensionIndex) : filename;
+		let copyNumber = 2;
+		let candidate = `${stem}-${copyNumber}${extension}`;
+		while (await exists(candidate)) {
+			copyNumber += 1;
+			candidate = `${stem}-${copyNumber}${extension}`;
+		}
+		return candidate;
+	}
+
 	/**
 	 * Find media by content hash
 	 * Used for deduplication - same content = same hash
@@ -371,10 +487,9 @@ export class MediaRepository {
 	 * The cursor encodes the created_at and id of the last item.
 	 */
 	async findMany(options: FindManyMediaOptions = {}): Promise<FindManyResult<MediaItem>> {
-		const limit = Math.min(options.limit || 50, 100);
+		const limit = normalizeListLimit(options.limit);
 
-		let query = this.db
-			.selectFrom("media")
+		let query = this.applyListFilters(this.db.selectFrom("media"), options)
 			.selectAll()
 			.orderBy("created_at", "desc")
 			.orderBy("id", "desc")
@@ -393,31 +508,6 @@ export class MediaRepository {
 			);
 		}
 
-		const mimeFilters = normalizeMimeFilter(options.mimeType);
-		if (mimeFilters.length > 0) {
-			query = query.where((eb) => mimeMatchExpr(eb, mimeFilters));
-		}
-
-		// Case-insensitive filename substring search (also matches extensions).
-		// LIKE wildcards in the term are escaped so they're treated literally.
-		const term = options.q?.trim();
-		if (term) {
-			const pattern = `%${escapeLike(term)}%`;
-			query = query.where(
-				sql<string>`lower(filename)`,
-				"like",
-				sql<string>`lower(${pattern}) escape '\\'`,
-			);
-		}
-
-		// Default to only showing ready items
-		if (options.status !== "all") {
-			query = query.where("status", "=", options.status ?? "ready");
-		}
-		if (options.visibility !== "all") {
-			query = query.where("visibility", "=", options.visibility ?? "public");
-		}
-
 		const rows = await query.execute();
 
 		const hasMore = rows.length > limit;
@@ -432,13 +522,31 @@ export class MediaRepository {
 		return { items, nextCursor };
 	}
 
+	async findPage(options: FindMediaPageOptions): Promise<MediaPageResult> {
+		const limit = normalizeListLimit(options.limit);
+		const offset = (options.page - 1) * limit;
+		const filtered = this.applyListFilters(this.db.selectFrom("media"), options);
+		const rows = await filtered
+			.selectAll()
+			.orderBy("created_at", "desc")
+			.orderBy("id", "desc")
+			.limit(limit)
+			.offset(offset)
+			.execute();
+		const count = await filtered
+			.select((eb) => eb.fn.count<number>("id").as("count"))
+			.executeTakeFirst();
+
+		return {
+			items: rows.map((row) => this.rowToItem(row)),
+			totalCount: Number(count?.count ?? 0),
+		};
+	}
+
 	/**
 	 * Update media metadata
 	 */
-	async update(
-		id: string,
-		input: Partial<Pick<CreateMediaInput, "alt" | "caption" | "width" | "height">>,
-	): Promise<MediaItem | null> {
+	async update(id: string, input: UpdateMediaInput): Promise<MediaItem | null> {
 		const existing = await this.findById(id);
 		if (!existing) {
 			return null;
@@ -449,12 +557,69 @@ export class MediaRepository {
 		if (input.caption !== undefined) updates.caption = input.caption;
 		if (input.width !== undefined) updates.width = input.width;
 		if (input.height !== undefined) updates.height = input.height;
+		if (input.folderId !== undefined) updates.folder_id = input.folderId;
+		if (input.focalX !== undefined && input.focalY !== undefined) {
+			updates.focal_x = input.focalX;
+			updates.focal_y = input.focalY;
+		}
 
 		if (Object.keys(updates).length > 0) {
 			await this.db.updateTable("media").set(updates).where("id", "=", id).execute();
 		}
 
 		return this.findById(id);
+	}
+
+	async updateReadyMetadata(
+		id: string,
+		input: Pick<UpdateMediaInput, "alt" | "caption" | "focalX" | "focalY">,
+	): Promise<MediaItem | null> {
+		const updates: Partial<MediaRow> = {};
+		if (input.alt !== undefined) updates.alt = input.alt;
+		if (input.caption !== undefined) updates.caption = input.caption;
+		if (input.focalX !== undefined && input.focalY !== undefined) {
+			updates.focal_x = input.focalX;
+			updates.focal_y = input.focalY;
+		}
+
+		if (Object.keys(updates).length === 0) {
+			throw new TypeError("Media metadata update requires at least one field");
+		}
+
+		const row = await this.db
+			.updateTable("media")
+			.set(updates)
+			.where("id", "=", id)
+			.where("status", "=", "ready")
+			.returningAll()
+			.executeTakeFirst();
+		return row ? this.rowToItem(row) : null;
+	}
+
+	async replaceReadyFile(
+		id: string,
+		expectedStorageKey: string,
+		input: ReplaceReadyMediaInput,
+	): Promise<MediaItem | null> {
+		const row = await this.db
+			.updateTable("media")
+			.set({
+				size: input.size,
+				width: input.width,
+				height: input.height,
+				content_hash: input.contentHash,
+				blurhash: null,
+				dominant_color: null,
+				focal_x: null,
+				focal_y: null,
+			})
+			.where("id", "=", id)
+			.where("status", "=", "ready")
+			.where("storage_key", "=", expectedStorageKey)
+			.returningAll()
+			.executeTakeFirst();
+
+		return row ? this.rowToItem(row) : null;
 	}
 
 	/**
@@ -468,6 +633,15 @@ export class MediaRepository {
 			.executeTakeFirst();
 		if (deleted) return deleted.storage_key;
 		return null;
+	}
+
+	async isStorageKeyReferenced(storageKey: string): Promise<boolean> {
+		const row = await this.db
+			.selectFrom("media")
+			.select("id")
+			.where("storage_key", "=", storageKey)
+			.executeTakeFirst();
+		return row !== undefined;
 	}
 
 	async delete(id: string): Promise<boolean> {
@@ -489,6 +663,42 @@ export class MediaRepository {
 		return Number(result?.count || 0);
 	}
 
+	private applyListFilters<O>(
+		query: SelectQueryBuilder<Database, "media", O>,
+		options: Omit<FindManyMediaOptions, "cursor" | "limit">,
+	): SelectQueryBuilder<Database, "media", O> {
+		const mimeFilters = normalizeMimeFilter(options.mimeType);
+		if (mimeFilters.length > 0) {
+			query = query.where((eb) => mimeMatchExpr(eb, mimeFilters));
+		}
+
+		const term = options.q?.trim();
+		if (term) {
+			const pattern = `%${escapeLike(term)}%`;
+			query = query.where(
+				sql<string>`lower(filename)`,
+				"like",
+				sql<string>`lower(${pattern}) escape '\\'`,
+			);
+		}
+
+		if (options.status !== "all") {
+			query = query.where("status", "=", options.status ?? "ready");
+		}
+
+		if (options.folderId === null) {
+			query = query.where("folder_id", "is", null);
+		} else if (options.folderId !== undefined) {
+			query = query.where("folder_id", "=", options.folderId);
+		}
+
+		if (options.visibility !== "all") {
+			query = query.where("visibility", "=", options.visibility ?? "public");
+		}
+
+		return query;
+	}
+
 	/**
 	 * Delete pending uploads older than the given age.
 	 * Pending uploads that were never confirmed indicate abandoned upload flows.
@@ -506,13 +716,29 @@ export class MediaRepository {
 			.returning("storage_key")
 			.execute();
 
-		return rows.map((r) => r.storage_key);
+		const keys = rows.map((r) => r.storage_key);
+		if (keys.length === 0) return keys;
+
+		// A stored object may still back another media row (for example after a
+		// legacy duplicate registration); never hand such a key to storage deletion.
+		const stillReferenced = new Set<string>();
+		for (const batch of chunks(keys, SQL_BATCH_SIZE)) {
+			const refs = await this.db
+				.selectFrom("media")
+				.select("storage_key")
+				.where("storage_key", "in", batch)
+				.execute();
+			for (const ref of refs) stillReferenced.add(ref.storage_key);
+		}
+
+		return keys.filter((key) => !stillReferenced.has(key));
 	}
 
 	/**
 	 * Convert database row to MediaItem
 	 */
 	private rowToItem(row: MediaRow): MediaItem {
+		const focalPoint = normalizeFocalPoint(row.focal_x, row.focal_y);
 		return {
 			id: row.id,
 			filename: row.filename,
@@ -520,6 +746,8 @@ export class MediaRepository {
 			size: row.size,
 			width: row.width,
 			height: row.height,
+			focalX: focalPoint?.focalX ?? null,
+			focalY: focalPoint?.focalY ?? null,
 			alt: row.alt,
 			caption: row.caption,
 			storageKey: row.storage_key,
@@ -532,6 +760,7 @@ export class MediaRepository {
 			authorId: row.author_id,
 			// eslint-disable-next-line typescript/no-unsafe-type-assertion -- migration constrains stored values
 			visibility: row.visibility as MediaVisibility,
+			folderId: row.folder_id,
 		};
 	}
 }

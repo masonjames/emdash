@@ -1,138 +1,152 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { deleteSubmissionFiles } from "../src/cleanup.js";
 import { submitHandler } from "../src/handlers/submit.js";
-import { createPlugin } from "../src/index.js";
+import { MAX_SUBMISSION_FILE_BYTES, submitSchema } from "../src/schemas.js";
 import type { FormDefinition } from "../src/types.js";
 
-const form: FormDefinition = {
-	name: "Estimate",
-	slug: "project-estimate",
-	pages: [
-		{
-			fields: [
-				{
-					id: "brief",
-					name: "brief",
-					label: "Project brief",
-					type: "file",
-					required: true,
-					width: "full",
-					validation: { accept: ".pdf", maxFileSize: 25 * 1024 * 1024 },
-				},
-			],
-		},
-	],
-	settings: {
-		confirmationMessage: "Thanks",
-		notifyEmails: [],
-		digestEnabled: false,
-		digestHour: 8,
-		retentionDays: 365,
-		spamProtection: "none",
-		submitLabel: "Send",
-	},
-	status: "active",
-	submissionCount: 0,
-	lastSubmissionAt: null,
-	createdAt: "2026-01-01T00:00:00.000Z",
-	updatedAt: "2026-01-01T00:00:00.000Z",
-};
-
-function context(bytes = [0x25, 0x50, 0x44, 0x46, 0x2d]) {
-	const upload = vi.fn(async () => ({
-		mediaId: "media-1",
-		storageKey: "private/media-1.pdf",
-		url: "/_emdash/api/media/private/media-1.pdf",
-	}));
-	const putSubmission = vi.fn();
+function form(): FormDefinition {
 	return {
-		ctx: {
-			input: {
-				formId: "project-estimate",
-				data: {},
-				files: {
-					brief: {
-						filename: "brief.pdf",
-						contentType: "application/pdf",
-						bytes: new Uint8Array(bytes).buffer,
+		name: "Upload",
+		slug: "upload",
+		status: "active",
+		pages: [
+			{
+				fields: [
+					{
+						id: "f1",
+						name: "attachment",
+						label: "Attachment",
+						type: "file",
+						required: false,
+						width: "full",
+						validation: { maxFileSize: 1000 },
 					},
-				},
+					{ id: "f2", name: "extra", label: "Extra", type: "file", required: false, width: "full" },
+				],
 			},
-			storage: {
-				forms: {
-					get: vi.fn(async () => form),
-					put: vi.fn(),
-					query: vi.fn(),
-				},
-				submissions: {
-					put: putSubmission,
-					count: vi.fn(async () => 1),
-				},
-			},
-			media: { upload, delete: vi.fn() },
-			requestMeta: { ip: null, userAgent: null, referer: null },
-			log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+		],
+		submissionCount: 0,
+		lastSubmissionAt: null,
+		createdAt: "2026-01-01T00:00:00.000Z",
+		updatedAt: "2026-01-01T00:00:00.000Z",
+		settings: {
+			spamProtection: "none",
+			notifyEmails: [],
+			digestEnabled: false,
+			digestHour: 9,
+			retentionDays: 0,
+			submitLabel: "Send",
+			confirmationMessage: "Thanks",
 		},
-		upload,
-		putSubmission,
-	};
+	} as unknown as FormDefinition;
 }
 
-describe("private form attachments", () => {
-	it("grants editors submission access without granting form or plugin configuration", () => {
-		const routes = createPlugin().routes;
-		expect(routes["submissions/list"]?.permission).toBe("plugins:read");
-		expect(routes["submissions/get"]?.permission).toBe("plugins:read");
-		expect(routes["submissions/delete"]?.permission).toBe("plugins:read");
-		expect(routes["forms/update"]?.permission).toBeUndefined();
-		expect(routes["settings/turnstile-status"]?.permission).toBeUndefined();
-	});
+/** Parses the body as the route does, so the handler sees the schema's output. */
+function context(body: unknown, media?: Record<string, unknown>) {
+	const upload = vi.fn(async (_name: string, _type: string, bytes: ArrayBuffer) => ({
+		mediaId: "m1",
+		storageKey: "k1",
+		url: "/k1",
+		size: bytes.byteLength,
+	}));
+	const ctx = {
+		input: submitSchema.parse(body),
+		storage: {
+			forms: {
+				get: async (id: string) => (id === "upload" ? form() : null),
+				put: async () => {},
+				query: async () => ({ items: [] }),
+			},
+			submissions: { put: async () => {}, count: async () => 1 },
+		},
+		kv: { get: async () => null },
+		log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+		media: media ?? { upload },
+		requestMeta: { ip: "203.0.113.1", userAgent: "test", referer: null, headers: {} },
+	};
+	return { ctx, upload };
+}
 
-	it("uploads validated files as private and stores the authenticated download URL", async () => {
-		const { ctx, upload, putSubmission } = context();
-		await expect(submitHandler(ctx as never)).resolves.toMatchObject({ success: true });
-		expect(upload).toHaveBeenCalledWith("brief.pdf", "application/pdf", expect.any(ArrayBuffer), {
-			visibility: "private",
-		});
-		expect(putSubmission).toHaveBeenCalledWith(
-			expect.any(String),
-			expect.objectContaining({
-				files: [
-					expect.objectContaining({
-						mediaId: "media-1",
-						downloadUrl: "/_emdash/api/media/private/media-1.pdf",
-					}),
-				],
-			}),
-		);
-	});
+const submission = (bytes: unknown) => ({
+	formId: "upload",
+	data: {},
+	files: { attachment: { filename: "a.png", contentType: "image/png", bytes } },
+});
 
-	it("rejects spoofed files before media storage is called", async () => {
-		const { ctx, upload } = context([0x3c, 0x68, 0x74, 0x6d, 0x6c]);
-		await expect(submitHandler(ctx as never)).rejects.toThrow(/signature/i);
+describe("file uploads on public submissions", () => {
+	it("rejects a JSON byte array larger than the field's maxFileSize", async () => {
+		const { ctx, upload } = context(submission(Array.from<number>({ length: 2000 }).fill(65)));
+
+		await expect(submitHandler(ctx as never)).rejects.toMatchObject({ status: 400 });
 		expect(upload).not.toHaveBeenCalled();
 	});
 
-	it("retains submission records when attachment cleanup fails", async () => {
-		const error = vi.fn();
-		const result = await deleteSubmissionFiles(
+	it("uploads the posted bytes when they fit", async () => {
+		const { ctx, upload } = context(submission([137, 80, 78, 71, 13, 10, 26, 10]));
+
+		await submitHandler(ctx as never);
+
+		expect(upload).toHaveBeenCalledOnce();
+		const sent = upload.mock.calls[0]![2];
+		expect(sent).toBeInstanceOf(ArrayBuffer);
+		expect(new Uint8Array(sent)).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
+	});
+
+	it("decodes base64 file contents and applies maxFileSize to the decoded size", async () => {
+		const { ctx, upload } = context(submission("iVBORw0KGgo="));
+		await submitHandler(ctx as never);
+		expect(new Uint8Array(upload.mock.calls[0]![2])).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
+
+		const tooLarge = context(submission(btoa("A".repeat(2000))));
+		await expect(submitHandler(tooLarge.ctx as never)).rejects.toMatchObject({ status: 400 });
+		expect(tooLarge.upload).not.toHaveBeenCalled();
+	});
+
+	it("accepts base64 contents of a multi-megabyte file", () => {
+		const bytes = new Uint8Array(5 * 1024 * 1024).fill(0xab);
+		const parsed = submitSchema.parse(submission(Buffer.from(bytes).toString("base64")));
+		expect(Buffer.from(parsed.files!.attachment!.bytes).equals(bytes)).toBe(true);
+	});
+
+	it("rejects an empty file", () => {
+		expect(submitSchema.safeParse(submission("")).success).toBe(false);
+		expect(submitSchema.safeParse(submission([])).success).toBe(false);
+	});
+
+	it("rejects file contents that are not valid base64", () => {
+		expect(submitSchema.safeParse(submission("not base64!")).success).toBe(false);
+		expect(submitSchema.safeParse(submission("abc")).success).toBe(false);
+	});
+
+	it("rejects file bytes that are not an array of octets", () => {
+		expect(submitSchema.safeParse(submission({ length: 1 })).success).toBe(false);
+		expect(submitSchema.safeParse(submission([256])).success).toBe(false);
+	});
+
+	it("rejects file bytes above the 10 MB ceiling", () => {
+		const bytes = Array.from<number>({ length: MAX_SUBMISSION_FILE_BYTES + 1 }).fill(0);
+		expect(submitSchema.safeParse(submission(bytes)).success).toBe(false);
+	});
+
+	it("deletes files already uploaded when a later file in the submission is rejected", async () => {
+		const upload = vi
+			.fn()
+			.mockResolvedValueOnce({ mediaId: "m1", storageKey: "k1.png", url: "/k1.png" })
+			.mockRejectedValueOnce(Object.assign(new Error("File type not allowed"), { status: 415 }));
+		const remove = vi.fn(async () => true);
+		const { ctx } = context(
 			{
-				media: { delete: vi.fn(async () => Promise.reject(new Error("R2 unavailable"))) },
-				log: { error },
-			} as never,
-			[
-				{
-					fieldName: "brief",
-					filename: "brief.pdf",
-					contentType: "application/pdf",
-					size: 5,
-					mediaId: "media-1",
-					downloadUrl: "/private/media-1",
+				formId: "upload",
+				data: {},
+				files: {
+					attachment: { filename: "a.png", contentType: "image/png", bytes: "iVBORw0KGgo=" },
+					extra: { filename: "b.png", contentType: "image/png", bytes: "iVBORw0KGgo=" },
 				},
-			],
+			},
+			{ upload, delete: remove },
 		);
-		expect(result).toBe(false);
-		expect(error).toHaveBeenCalled();
+
+		await expect(submitHandler(ctx as never)).rejects.toMatchObject({ status: 415 });
+		expect(remove).toHaveBeenCalledWith("m1");
 	});
 });
