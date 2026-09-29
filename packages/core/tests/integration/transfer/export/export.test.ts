@@ -34,6 +34,17 @@ describeEachDialect("site export", (dialect) => {
 		await teardownForDialect(ctx);
 	});
 
+	it("refuses to export private media into a format without access restrictions", async () => {
+		await ctx.db
+			.updateTable("media")
+			.set({ visibility: "private" })
+			.where("status", "=", "ready")
+			.execute();
+		const { result } = await runExport(ctx.db, storage);
+		expect(result.outcome).toBe("failed");
+		expect(result.operation.errorCode).toBe("TRANSFER_EXPORT_ERROR");
+	});
+
 	it("exports a package that never contains credentials, secrets, or storage keys", async () => {
 		const { result, reader } = await runExport(ctx.db, storage);
 		expect({

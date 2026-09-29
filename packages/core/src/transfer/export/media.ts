@@ -11,6 +11,7 @@ import { sql, type Kysely } from "kysely";
 
 import type { Database } from "../../database/types.js";
 import type { Storage } from "../../storage/types.js";
+import { TransferError } from "../errors.js";
 import { createSha256 } from "../format/digest.js";
 import {
 	buildMediaKeyIndex,
@@ -38,7 +39,7 @@ export async function listMediaCandidates(
 ): Promise<MediaCandidate[]> {
 	let query = db
 		.selectFrom("media")
-		.select(["id", "storage_key", "status", "size"])
+		.select(["id", "storage_key", "status", "size", "visibility"])
 		.where((eb) =>
 			eb.or([
 				eb("status", "=", "ready"),
@@ -64,6 +65,12 @@ export async function listMediaCandidates(
 		);
 	if (after !== null) query = query.where(sql<boolean>`${bytewise(db, "id")} > ${after}`);
 	const rows = await query.orderBy(bytewise(db, "id")).limit(limit).execute();
+	if (rows.some((row) => row.visibility === "private")) {
+		throw new TransferError(
+			"TRANSFER_EXPORT_ERROR",
+			"Private media cannot be exported: this package format does not preserve access restrictions",
+		);
+	}
 	return rows.map((row) => ({
 		id: row.id,
 		storageKey: row.storage_key,

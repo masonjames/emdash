@@ -59,6 +59,24 @@ describe("opaque media asset route", () => {
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
 	});
 
+	it("keeps private attachments behind the stricter private route", async () => {
+		const item = await new MediaRepository(db).create({
+			filename: "attachment.pdf",
+			mimeType: "application/pdf",
+			size: 5,
+			storageKey: "private/attachment.pdf",
+			visibility: "private",
+		});
+		const metadata = await createMediaAccess(db).get(item.id);
+		expect(metadata?.url).toContain("/_emdash/api/media/private/");
+		// eslint-disable-next-line typescript/no-unsafe-type-assertion -- minimal route context
+		const response = await GET({
+			params: { id: item.id, filename: item.filename },
+			locals: { emdash: { db, storage }, user: { id: "reader", role: 10 } },
+		} as Parameters<typeof GET>[0]);
+		expect(response.status).toBe(404);
+	});
+
 	it("does not serve pending media or a mismatched filename", async () => {
 		const pending = await new MediaRepository(db).createPending({
 			filename: "pending.bin",

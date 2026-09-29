@@ -229,6 +229,8 @@ const PORTABLE_TABLE_LIST: PortableTableSpec[] = [
 			alt: f("alt"),
 			caption: f("caption"),
 			storage_key: TARGET_LOCAL,
+			// Private media is rejected by the exporter until the package format carries visibility.
+			visibility: EXCLUDED,
 			content_hash: DERIVED,
 			status: DERIVED,
 			blurhash: f("blurhash"),
