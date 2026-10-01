@@ -30,7 +30,12 @@ export const GET: APIRoute = async ({ params, locals }) => {
 
 	try {
 		const item = await new MediaRepository(emdash.db).findById(id);
-		if (!item || item.status !== "ready" || item.filename !== filename || item.visibility === "private") {
+		if (
+			!item ||
+			item.status !== "ready" ||
+			item.filename !== filename ||
+			item.visibility === "private"
+		) {
 			return apiError("NOT_FOUND", "File not found", 404);
 		}
 		const result = await emdash.storage.download(item.storageKey);

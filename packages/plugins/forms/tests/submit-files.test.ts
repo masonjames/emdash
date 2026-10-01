@@ -95,7 +95,9 @@ describe("file uploads on public submissions", () => {
 	it("decodes base64 file contents and applies maxFileSize to the decoded size", async () => {
 		const { ctx, upload } = context(submission("iVBORw0KGgo="));
 		await submitHandler(ctx as never);
-		expect(new Uint8Array(upload.mock.calls[0]![2])).toEqual(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]));
+		expect(new Uint8Array(upload.mock.calls[0]![2])).toEqual(
+			new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+		);
 
 		const tooLarge = context(submission(btoa("A".repeat(2000))));
 		await expect(submitHandler(tooLarge.ctx as never)).rejects.toMatchObject({ status: 400 });

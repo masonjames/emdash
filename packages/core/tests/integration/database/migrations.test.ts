@@ -185,7 +185,9 @@ describe("Database Migrations (Integration)", () => {
 		it("keeps upstream sequences unique alongside the shipped private-media migration", () => {
 			expect(MIGRATION_NAMES).toContain("071_media_visibility");
 			expect(new Set(MIGRATION_NAMES).size).toBe(MIGRATION_NAMES.length);
-			const sequence = MIGRATION_NAMES.filter((name) => name !== "071_media_visibility").map((name) => Number(name.slice(0, 3)));
+			const sequence = MIGRATION_NAMES.filter((name) => name !== "071_media_visibility").map(
+				(name) => Number(name.slice(0, 3)),
+			);
 
 			expect(MIGRATION_NAMES).toEqual(MIGRATION_NAMES.toSorted());
 			expect(sequence.every(Number.isInteger)).toBe(true);
@@ -195,7 +197,10 @@ describe("Database Migrations (Integration)", () => {
 
 		it("recognizes the shipped private-media migration when upgrading its historical prefix", async () => {
 			await runMigrations(db);
-			await db.deleteFrom("_emdash_migrations").where("name", ">", "071_media_visibility").execute();
+			await db
+				.deleteFrom("_emdash_migrations")
+				.where("name", ">", "071_media_visibility")
+				.execute();
 			const before = await getExactMigrationStatus(db);
 			expect(before.knownApplied).toContain("071_media_visibility");
 			expect(before.unknownApplied).toEqual([]);

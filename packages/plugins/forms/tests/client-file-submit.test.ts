@@ -89,7 +89,9 @@ describe("submitting a form with a file field from the bundled client", () => {
 		const result = await submitHandler(ctx as never);
 
 		expect(result).toMatchObject({ success: true });
-		expect(upload).toHaveBeenCalledWith("cv.pdf", "application/pdf", expect.any(ArrayBuffer), { visibility: "private" });
+		expect(upload).toHaveBeenCalledWith("cv.pdf", "application/pdf", expect.any(ArrayBuffer), {
+			visibility: "private",
+		});
 		expect(uploaded).toEqual([new Uint8Array([37, 80, 68, 70, 45])]);
 		expect(stored).toMatchObject([
 			{
@@ -108,14 +110,20 @@ describe("submitting a form with a file field from the bundled client", () => {
 
 	it("does not upload a file sent for a field its condition hides", async () => {
 		const body = (await applicationBody()) as { files: Record<string, unknown> };
-		body.files.portfolio = { filename: "page.pdf", contentType: "application/pdf", bytes: "JVBERi0=" };
+		body.files.portfolio = {
+			filename: "page.pdf",
+			contentType: "application/pdf",
+			bytes: "JVBERi0=",
+		};
 		const upload = vi.fn(async () => ({ mediaId: "m1", storageKey: "k1.pdf", url: "/k1.pdf" }));
 		const { ctx, stored } = context(body, { upload });
 
 		await submitHandler(ctx as never);
 
 		expect(upload).toHaveBeenCalledTimes(1);
-		expect(upload).toHaveBeenCalledWith("cv.pdf", "application/pdf", expect.any(ArrayBuffer), { visibility: "private" });
+		expect(upload).toHaveBeenCalledWith("cv.pdf", "application/pdf", expect.any(ArrayBuffer), {
+			visibility: "private",
+		});
 		expect(stored).toMatchObject([{ files: [{ fieldName: "cv" }] }]);
 	});
 });
