@@ -26,6 +26,7 @@ export const GLOBAL_UPLOAD_ALLOWLIST: readonly string[] = [
 	"image/heif",
 	"image/heic-sequence",
 	"image/heif-sequence",
+	"image/jxl",
 	"video/",
 	"audio/",
 	"application/pdf",
