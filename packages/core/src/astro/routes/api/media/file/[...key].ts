@@ -108,6 +108,7 @@ export const GET: APIRoute = async ({ params, locals, request, cache }) => {
 			: IMMUTABLE_IMAGE_CACHE;
 
 		if (isNotModified(request, result.size, result.lastModified)) {
+			await result.body.cancel().catch(() => undefined);
 			return new Response(null, {
 				status: 304,
 				headers: {

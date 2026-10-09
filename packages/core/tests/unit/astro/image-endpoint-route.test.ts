@@ -82,11 +82,18 @@ describe("storage-backed Node image endpoint", () => {
 
 	it("revalidates original bytes when an external service passes the source through", async () => {
 		assets.service = { getURL: async ({ src }: { src: string }) => src };
+		const cancel = vi.fn();
 		let lastModified = new Date("2026-01-15T12:00:00.000Z");
 		const storage = {
 			getPublicUrl: (key: string) => `https://media.example.com/${key}`,
 			download: async () => ({
-				body: new Response("<svg/>").body!,
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("<svg/>"));
+						controller.close();
+					},
+					cancel,
+				}),
 				contentType: "image/svg+xml",
 				size: 6,
 				lastModified,
@@ -112,6 +119,7 @@ describe("storage-backed Node image endpoint", () => {
 			const cached = await GET(conditional);
 			expect(cached.status).toBe(304);
 			expect(cached.body).toBeNull();
+			expect(cancel).toHaveBeenCalledTimes(header === "If-None-Match" ? 1 : 2);
 			expect(cached.headers.get("ETag")).toBe(etag);
 		}
 

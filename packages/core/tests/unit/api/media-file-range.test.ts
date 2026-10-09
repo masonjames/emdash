@@ -109,6 +109,24 @@ describe("public media file route byte ranges", () => {
 		expect(await response.text()).toBe(CLIP);
 	});
 
+	it("releases the unused download on a conditional response", async () => {
+		const cancel = vi.fn();
+		const adapter: Pick<Storage, "download"> = {
+			download: async () => ({
+				body: new ReadableStream<Uint8Array>({ cancel }),
+				contentType: "video/mp4",
+				size: CLIP.length,
+				lastModified: new Date("2026-01-15T12:00:00Z"),
+			}),
+		};
+		const first = await serve(adapter);
+		await first.body?.cancel();
+		cancel.mockClear();
+		const response = await serve(adapter, { "If-None-Match": first.headers.get("ETag")! });
+		expect(response.status).toBe(304);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
 	describe("with an adapter that ignores ranges", () => {
 		const wholeFile: Pick<Storage, "download"> = {
 			download: async () => ({
