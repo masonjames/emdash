@@ -58,16 +58,10 @@ function streamOriginal(
 	});
 }
 
-function notModifiedResponse(
-	contentType: string,
-	size: number,
-	lastModified?: Date,
-	suffix?: string,
-): Response {
+function notModifiedResponse(size: number, lastModified?: Date, suffix?: string): Response {
 	return new Response(null, {
 		status: 304,
 		headers: {
-			"Content-Type": contentType,
 			"Cache-Control": MUTABLE_MEDIA_CACHE_CONTROL,
 			"X-Content-Type-Options": "nosniff",
 			...validatorHeaders(size, lastModified, suffix),
@@ -100,7 +94,8 @@ export const GET: APIRoute = async (ctx) => {
 		// Only raster images are transformable; serve anything else unchanged.
 		if (!source.contentType.startsWith("image/")) {
 			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				return notModifiedResponse(source.contentType, source.size, source.lastModified);
+				await source.body.cancel().catch(() => undefined);
+				return notModifiedResponse(source.size, source.lastModified);
 			}
 			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
 		}
@@ -111,14 +106,16 @@ export const GET: APIRoute = async (ctx) => {
 		// No binding or unparseable params: serve the original so the URL resolves.
 		if (!images || !parsed.ok) {
 			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				return notModifiedResponse(source.contentType, source.size, source.lastModified);
+				await source.body.cancel().catch(() => undefined);
+				return notModifiedResponse(source.size, source.lastModified);
 			}
 			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
 		}
 
 		const fingerprint = getTransformFingerprint(url.searchParams);
 		if (isNotModified(ctx.request, source.size, source.lastModified, fingerprint)) {
-			return notModifiedResponse(source.contentType, source.size, source.lastModified, fingerprint);
+			await source.body.cancel().catch(() => undefined);
+			return notModifiedResponse(source.size, source.lastModified, fingerprint);
 		}
 
 		const { width, height, format, quality } = parsed.options;
