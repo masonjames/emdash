@@ -80,6 +80,58 @@ describe("storage-backed Node image endpoint", () => {
 		);
 	});
 
+	it("revalidates original bytes when an external service passes the source through", async () => {
+		assets.service = { getURL: async ({ src }: { src: string }) => src };
+		const cancel = vi.fn();
+		let lastModified = new Date("2026-01-15T12:00:00.000Z");
+		const storage = {
+			getPublicUrl: (key: string) => `https://media.example.com/${key}`,
+			download: async () => ({
+				body: new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("<svg/>"));
+						controller.close();
+					},
+					cancel,
+				}),
+				contentType: "image/svg+xml",
+				size: 6,
+				lastModified,
+			}),
+		};
+		const first = await GET(context("photo.svg", storage));
+		expect(first.status).toBe(200);
+		expect(await first.text()).toBe("<svg/>");
+		expect(first.headers.get("Content-Disposition")).toBe("attachment");
+		expect(first.headers.get("Content-Security-Policy")).toContain("sandbox");
+		expect(first.headers.get("X-Content-Type-Options")).toBe("nosniff");
+		expect(first.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+		expect(first.headers.get("Last-Modified")).toBe(lastModified.toUTCString());
+		const etag = first.headers.get("ETag");
+		expect(etag).toBeTruthy();
+
+		for (const [header, value] of [
+			["If-None-Match", etag!],
+			["If-Modified-Since", lastModified.toUTCString()],
+		] as const) {
+			const conditional = context("photo.svg", storage);
+			conditional.request.headers.set(header, value);
+			const cached = await GET(conditional);
+			expect(cached.status).toBe(304);
+			expect(cached.body).toBeNull();
+			expect(cancel).toHaveBeenCalledTimes(header === "If-None-Match" ? 1 : 2);
+			expect(cached.headers.get("ETag")).toBe(etag);
+		}
+
+		lastModified = new Date("2026-01-15T12:01:00.000Z");
+		const replaced = context("photo.svg", storage);
+		replaced.request.headers.set("If-None-Match", etag!);
+		const updated = await GET(replaced);
+		expect(updated.status).toBe(200);
+		expect(updated.headers.get("ETag")).not.toBe(etag);
+		expect(await updated.text()).toBe("<svg/>");
+	});
+
 	it("reports HEIC as unsupported when an external service rewrites without declaring support", async () => {
 		assets.service = {
 			getURL: async ({ src }: { src: string }) => `https://images.example.com/${src}`,
