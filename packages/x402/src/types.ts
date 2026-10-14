@@ -81,6 +81,8 @@ export interface EnforceOptions {
 	description?: string;
 	/** MIME type hint for the resource */
 	mimeType?: string;
+	/** JSON-serializable discovery metadata included in 402 responses (e.g., Bazaar). */
+	extensions?: Record<string, unknown>;
 }
 
 /**

@@ -231,6 +231,29 @@ await x402.enforce(Astro.request, {
 });
 ```
 
+## Discovery metadata
+
+Pass JSON-serializable `extensions` to `enforce()` to describe a paid resource to discovery clients. The metadata appears in both the 402 JSON body and the encoded `PAYMENT-REQUIRED` header, including challenges after a rejected payment. Keep examples synthetic or public: this metadata is readable before payment.
+
+For a paid Markdown endpoint such as [Paid Access](https://github.com/masonjames/emdash-paid-access), a client first selects a concrete purchase URL from `/agents/offers.json`. That URL already identifies the collection and post, so the request needs no query parameters. The [Paid Access discovery example](https://github.com/emdash-cms/emdash/blob/main/packages/x402/examples/paid-access.ts) declares that input and a synthetic Markdown output using Bazaar metadata.
+
+When developing the Paid Access companion, copy the example into its source directory as `paid-access-discovery.ts`. The following change adds its metadata to the existing `enforce()` call in `serveAgentEntry()`, after access rules and the price have been resolved:
+
+```ts title="src/agent.ts"
+import { paidAccessExtensions } from "./paid-access-discovery.js";
+
+enforced = await input.enforcer.enforce(input.request, {
+	price,
+	payTo: input.settings.payTo,
+	network: input.settings.network,
+	description: input.entry.title,
+	mimeType: "text/markdown",
+	extensions: paidAccessExtensions,
+});
+```
+
+Keep the companion's existing settlement checks, receipt handling, and private cache headers. The offers catalogue supplies purchase URLs and prices; the 402 extensions describe an individual request and response. Publishing an OpenAPI discovery document and registering with a discovery service are separate steps.
+
 ## Enable Solana support
 
 Solana is opt-in. Install `@x402/svm` and enable it in config:
