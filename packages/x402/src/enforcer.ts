@@ -148,7 +148,13 @@ export function createEnforcer(config: X402Config): X402Enforcer {
 				request.headers.get(PAYMENT_SIGNATURE_HEADER) || request.headers.get("PAYMENT-SIGNATURE");
 
 			if (!paymentHeader) {
-				return make402(server, resourceConfig, resourceInfo, "Payment required");
+				return make402(
+					server,
+					resourceConfig,
+					resourceInfo,
+					"Payment required",
+					options?.extensions,
+				);
 			}
 
 			// Payment present -- decode and verify
@@ -162,6 +168,7 @@ export function createEnforcer(config: X402Config): X402Enforcer {
 					resourceConfig,
 					resourceInfo,
 					"Payment does not match accepted requirements",
+					options?.extensions,
 				);
 			}
 
@@ -174,6 +181,7 @@ export function createEnforcer(config: X402Config): X402Enforcer {
 					resourceConfig,
 					resourceInfo,
 					verifyResult.invalidReason ?? "Payment verification failed",
+					options?.extensions,
 				);
 			}
 
@@ -214,12 +222,14 @@ async function make402(
 	resourceConfig: ResourceConfig,
 	resourceInfo: { url: string; description?: string; mimeType?: string },
 	error: string,
+	extensions?: EnforceOptions["extensions"],
 ): Promise<Response> {
 	const requirements = await server.buildPaymentRequirements(resourceConfig);
 	const paymentRequired = await server.createPaymentRequiredResponse(
 		requirements,
 		resourceInfo,
 		error,
+		extensions,
 	);
 
 	return new Response(JSON.stringify(paymentRequired), {
