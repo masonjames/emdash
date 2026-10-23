@@ -72,6 +72,19 @@ describe("validateSubmission checkbox", () => {
 });
 
 describe("validateSubmission checkbox-group", () => {
+	it.each([{ selection: [] }, { selection: [""] }, { selection: [" "] }])(
+		"rejects an empty required selection: $selection",
+		({ selection }) => {
+			const result = validateSubmission(
+				[{ ...checkboxField(), required: true, options: undefined }],
+				{ interests: selection },
+			);
+			expect(result.valid).toBe(false);
+			expect(result.errors).toEqual([{ field: "interests", message: "Interests is required" }]);
+			expect(result.data).toEqual({});
+		},
+	);
+
 	it("accepts multiple selected values", () => {
 		const result = validateSubmission([checkboxField()], {
 			interests: ["a", "b"],

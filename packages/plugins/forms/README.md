@@ -1,6 +1,6 @@
 # Forms plugin
 
-`@emdash-cms/plugin-forms` collects submissions in the EmDash forms inbox. It is a native plugin and requires EmDash 0.39.0 or later.
+`@emdash-cms/plugin-forms` collects submissions in the EmDash forms inbox. It is a native plugin and requires EmDash 0.42.0 or later.
 
 ## Create draft content from submissions
 
@@ -38,7 +38,7 @@ Mappings support these transforms:
 
 Omit the transform to keep the validated form value. Use a number form field for a required number target, and a date form field with the `date` transform for a required datetime target. Number form fields cannot map to integer targets because submissions may contain decimals. File fields cannot be mapped.
 
-The optional `metadata` object supplies fixed collection field values, such as `"metadata": { "source": "form" }` when the collection has a `source` text field. Each target field can be assigned once, through either a field mapping or metadata. Every required target needs non-empty metadata or a required source field with no display condition. Mappings are checked when forms are created or duplicated, and when their pages or mapping settings change. A stale mapping does not prevent pausing a form or changing unrelated settings.
+The optional `metadata` object supplies fixed collection field values, such as `"metadata": { "source": "form" }` when the collection has a `source` text field. Each target field can be assigned once, through either a field mapping or metadata. Every required target needs non-empty metadata or a required source field with no display condition. Mappings are checked when forms are created or duplicated, and when their pages or mapping settings change. A stale mapping does not prevent status-only updates, such as pausing a form, or settings updates that leave pages and the mapping unchanged. For forms with multiple pages or page titles, update settings through the API while omitting `pages`; the admin editor sends only the first page without its title.
 
 A mapping checks field existence, compatible value types, and required-field coverage. Collection constraints such as length limits, supported date ranges, uniqueness, and subsequent schema changes can still reject an entry. Test a submission after configuring the mapping and after changing the target collection.
 

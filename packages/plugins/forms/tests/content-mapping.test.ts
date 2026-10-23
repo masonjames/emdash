@@ -320,6 +320,21 @@ describe("textToPortableText", () => {
 // ─── Building Entries ────────────────────────────────────────────
 
 describe("buildContentEntry", () => {
+	it.each([{ selection: [] }, { selection: [""] }, { selection: [" "] }])(
+		"omits empty selections instead of creating a numeric zero: $selection",
+		({ selection }) => {
+			expect(
+				buildContentEntry(
+					{
+						collection: "events",
+						fieldMappings: { attendees: { field: "attendees", transform: "number" } },
+					},
+					{ attendees: selection },
+				),
+			).toEqual({});
+		},
+	);
+
 	it("maps submitted values onto target fields", () => {
 		const entry = buildContentEntry(validMapping, {
 			event_title: "Community BBQ",
@@ -801,7 +816,7 @@ describe("formsUpdateHandler with content mapping", () => {
 		const input: FormUpdateInput = {
 			id: "form-1",
 			name: "Renamed form",
-			pages: structuredClone(existing.pages),
+			pages: [{ fields: structuredClone(existing.pages[0]!.fields) }],
 			settings: { ...existing.settings, confirmationMessage: "Updated confirmation" },
 		};
 		const { ctx, forms } = createTestContext(input, { collections: {} });
@@ -810,6 +825,24 @@ describe("formsUpdateHandler with content mapping", () => {
 		expect(result.name).toBe("Renamed form");
 		expect(result.settings.confirmationMessage).toBe("Updated confirmation");
 		expect(result.settings.contentMapping).toEqual(validMapping);
+	});
+
+	it("rejects an editor save that drops a page containing a mapped field", async () => {
+		const existing = makeForm({
+			pages: [
+				{ fields: [makeField({ name: "unmapped" })] },
+				{ title: "Event details", fields: formPages[0]!.fields },
+			],
+			settings: { ...makeForm().settings, contentMapping: validMapping },
+		});
+		const { ctx, forms } = createTestContext<FormUpdateInput>({
+			id: "form-1",
+			pages: [{ fields: existing.pages[0]!.fields }],
+			settings: { ...existing.settings, confirmationMessage: "Updated confirmation" },
+		});
+		await forms.put("form-1", existing);
+		await expect(formsUpdateHandler(ctx)).rejects.toThrow(/unknown form field "event_title"/);
+		expect(await forms.get("form-1")).toEqual(existing);
 	});
 
 	it("still rejects an explicitly supplied stale mapping", async () => {
@@ -916,6 +949,41 @@ describe("submitHandler with content mapping", () => {
 			{ _type: "block", children: [{ _type: "span", text: "Bring a dish." }] },
 			{ _type: "block", children: [{ _type: "span", text: "All welcome." }] },
 		]);
+	});
+
+	it("returns confirmation while content creation is still pending", async () => {
+		const { ctx, forms, submissions, created } = createTestContext(makeSubmitInput(submission));
+		await forms.put(
+			"form-1",
+			makeForm({ settings: { ...makeForm().settings, contentMapping: validMapping } }),
+		);
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const create = ctx.content!.create!;
+		const delayedCreate = vi.spyOn(ctx.content!, "create").mockImplementation(async (...args) => {
+			await pending;
+			return create(...args);
+		});
+		let response: Awaited<ReturnType<typeof submitHandler>> | undefined;
+		const submitted = submitHandler(ctx).then((result) => {
+			response = result;
+			return result;
+		});
+		try {
+			await settle();
+			expect(delayedCreate).toHaveBeenCalledOnce();
+			expect(response).toMatchObject({ success: true });
+			expect(submissions.items.size).toBe(1);
+			expect(created).toHaveLength(0);
+		} finally {
+			release();
+			await submitted;
+			await settle();
+			delayedCreate.mockRestore();
+		}
+		expect(created).toHaveLength(1);
 	});
 
 	it("preserves the submission and still succeeds when content creation fails", async () => {

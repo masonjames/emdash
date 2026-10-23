@@ -59,8 +59,13 @@ export function validateSubmission(
 		const value = typeof raw === "string" ? raw.trim() : raw;
 		const isEmpty = value === undefined || value === null || value === "";
 
+		const emptySelection =
+			field.type === "checkbox-group" &&
+			Array.isArray(value) &&
+			value.every((item) => typeof item === "string" && item.trim() === "");
+
 		// Required check
-		if (field.required && isEmpty) {
+		if (field.required && (isEmpty || emptySelection)) {
 			errors.push({ field: field.name, message: `${field.label} is required` });
 			continue;
 		}

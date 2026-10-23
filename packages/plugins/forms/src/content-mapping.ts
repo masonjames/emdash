@@ -298,7 +298,12 @@ export function buildContentEntry(
 
 	for (const [formField, target] of Object.entries(mapping.fieldMappings)) {
 		const value = data[formField];
-		if (value === undefined || value === null || value === "") continue;
+		if (
+			isEmptyValue(value) ||
+			(Array.isArray(value) &&
+				value.every((item) => typeof item === "string" && item.trim() === ""))
+		)
+			continue;
 
 		const targetField = typeof target === "string" ? target : target.field;
 		const transform = typeof target === "string" ? undefined : target.transform;

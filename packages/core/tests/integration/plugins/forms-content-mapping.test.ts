@@ -206,6 +206,121 @@ describe("forms content mapping through the runtime", () => {
 		).toHaveLength(0);
 	});
 
+	it("stores URL, date, and select mappings through core validation", async () => {
+		await runtime.schemaRegistry.createField("events", {
+			slug: "website",
+			label: "Website",
+			type: "url",
+			required: true,
+		});
+		await runtime.schemaRegistry.createField("events", {
+			slug: "starts_at",
+			label: "Starts at",
+			type: "datetime",
+			required: true,
+		});
+		await runtime.schemaRegistry.createField("events", {
+			slug: "category",
+			label: "Category",
+			type: "select",
+			required: true,
+			validation: { options: ["news", "event"] },
+		});
+		const created = await route("forms/create", {
+			name: "Submit event details",
+			slug: "event-details",
+			pages: [
+				{
+					fields: [
+						{ id: "website", name: "website", label: "Website", type: "url", required: true },
+						{ id: "date", name: "date", label: "Date", type: "date", required: true },
+						{
+							id: "category",
+							name: "category",
+							label: "Category",
+							type: "select",
+							required: true,
+							options: [{ label: "Event", value: "event" }],
+						},
+					],
+				},
+			],
+			settings: {
+				spamProtection: "none",
+				contentMapping: {
+					collection: "events",
+					metadata: { title: "Community BBQ" },
+					fieldMappings: {
+						website: "website",
+						date: { field: "starts_at", transform: "date" },
+						category: "category",
+					},
+				},
+			},
+		});
+		if (!created.success) throw new Error(JSON.stringify(created.error));
+		const formId = (created.data as { id: string }).id;
+		expect(
+			await route("submit", {
+				formId,
+				data: { website: "https://example.com/event", date: "2026-08-01", category: "event" },
+			}),
+		).toMatchObject({ success: true, data: { success: true } });
+		await waitForDeferredTasks();
+		const entries = await runtime.db.selectFrom("ec_events").selectAll().execute();
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({
+			status: "draft",
+			website: "https://example.com/event",
+			starts_at: "2026-08-01T00:00:00.000Z",
+			category: "event",
+		});
+	});
+
+	it("requires a checkbox selection before creating its mapped draft", async () => {
+		const created = await route("forms/create", {
+			name: "Submit topics",
+			slug: "submit-topics",
+			pages: [
+				{
+					fields: [
+						{
+							id: "topics",
+							name: "topics",
+							label: "Topics",
+							type: "checkbox-group",
+							required: true,
+							options: [{ label: "News", value: "news" }],
+						},
+					],
+				},
+			],
+			settings: {
+				spamProtection: "none",
+				contentMapping: {
+					collection: "events",
+					fieldMappings: { topics: { field: "title", transform: "string" } },
+				},
+			},
+		});
+		if (!created.success) throw new Error(JSON.stringify(created.error));
+		const formId = (created.data as { id: string }).id;
+		expect(await route("submit", { formId, data: { topics: [] } })).toMatchObject({
+			success: true,
+			data: { success: false, errors: [{ field: "topics", message: "Topics is required" }] },
+		});
+		await waitForDeferredTasks();
+		expect(await runtime.db.selectFrom("ec_events").selectAll().execute()).toHaveLength(0);
+		expect(await route("submit", { formId, data: { topics: ["news"] } })).toMatchObject({
+			success: true,
+			data: { success: true },
+		});
+		await waitForDeferredTasks();
+		const entries = await runtime.db.selectFrom("ec_events").selectAll().execute();
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({ title: "news", status: "draft", published_at: null });
+	});
+
 	it("keeps forms without a mapping inbox-only", async () => {
 		const formId = await saveForm();
 		expect(await route("submit", { formId, data: { name: "Community BBQ" } })).toMatchObject({
