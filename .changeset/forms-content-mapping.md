@@ -2,8 +2,10 @@
 "@emdash-cms/plugin-forms": minor
 ---
 
-Adds an optional `contentMapping` form setting. When a form has one, each successful submission also creates a draft entry in the chosen collection. Each mapped form field can be converted on the way in (`portableText`, `string`, `number` or `date`), and `metadata` sets fixed values on every entry. The entry's slug comes from its `title` or `name` field, as it does for entries created in the admin.
+Adds the optional `settings.contentMapping` form setting to create draft content entries from form submissions. Configure it through the authenticated `forms/create` or `forms/update` plugin routes; the admin form editor does not expose it. This version requires EmDash 0.39.0 or later for collection schema access and the shared content-create path; upgrade older EmDash installations before updating the forms plugin. Existing forms keep their inbox-only behavior until a mapping is configured.
 
-The mapping is checked when the form is saved. The collection and every mapped field must exist, each form field and `metadata` value must produce a value its target field accepts, a field cannot be set by both a mapping and `metadata`, and every required field in the collection must be covered by a non-empty `metadata` value or a required form field that is always shown. File fields cannot be mapped. The submission is always kept in the forms inbox, even if creating the entry fails.
+Map form fields to a collection's fields, with optional `portableText`, `string`, `number`, or `date` transforms and fixed `metadata` values. Mappings are checked on create, duplication, and changes to pages or mapping settings for compatible field types, unambiguous targets, and required-field coverage. Entries use the site's default content locale and core slug generation. See the [forms plugin setup example](https://github.com/emdash-cms/emdash/tree/main/packages/plugins/forms#create-draft-content-from-submissions).
 
-The plugin now declares the `content:write` and `schema:read` capabilities. They are used only by forms with a `contentMapping`.
+Draft creation runs separately from the confirmation response. The submission stays in the inbox if content creation fails, and the failure is logged. Collection constraints and later schema changes can still reject entries. The plugin adds the `content:write` and `schema:read` capabilities; file fields cannot be mapped.
+
+Form submission validation also rejects non-finite numbers and malformed HTTP(S) URLs before storing a submission.

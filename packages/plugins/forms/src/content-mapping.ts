@@ -5,8 +5,9 @@
  * builds content entries from submissions.
  */
 
+import { z } from "astro/zod";
 import type { FieldSchemaInfo, RouteContext } from "emdash";
-import { PluginRouteError } from "emdash";
+import { isSafeHref, PluginRouteError } from "emdash";
 
 import type { ContentMapping, ContentMappingTransform, FormField, FormPage } from "./types.js";
 
@@ -54,6 +55,11 @@ export async function validateContentMapping(
 			);
 		}
 		const targetField = typeof target === "string" ? target : target.field;
+		if (mappedTargets.has(targetField)) {
+			throw PluginRouteError.badRequest(
+				`Content mapping field "${targetField}" in collection "${mapping.collection}" is mapped more than once`,
+			);
+		}
 		const transform = typeof target === "string" ? undefined : target.transform;
 		const collectionField = collectionFields.get(targetField);
 		if (!collectionField) {
@@ -101,7 +107,7 @@ export async function validateContentMapping(
 				`Content mapping metadata for required field "${key}" in collection "${mapping.collection}" must not be empty`,
 			);
 		}
-		if (!isEmptyValue(metadata[key]) && !accepts(collectionField, metadataValue(metadata[key]))) {
+		if (!acceptsMetadata(collectionField, metadata[key])) {
 			throw PluginRouteError.badRequest(
 				`Content mapping metadata for field "${key}" in collection "${mapping.collection}" is not a valid ${collectionField.type} value`,
 			);
@@ -151,7 +157,16 @@ interface ProducedValue {
 	options?: string[];
 }
 
-const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/;
+const isoDateTime = z.iso
+	.datetime({ offset: true })
+	.or(z.iso.datetime({ offset: true, precision: -1 }));
+const portableText = z.array(z.object({ _type: z.string(), _key: z.string().optional() }).loose());
+
+function acceptsMetadata(field: FieldSchemaInfo, value: unknown): boolean {
+	if (value === undefined || value === null) return !field.required;
+	if (field.type === "portableText") return portableText.safeParse(value).success;
+	return accepts(field, metadataValue(value));
+}
 
 /** What `validateSubmission` leaves in the submission data for a form field. */
 function formValue(field: FormField): ProducedValue {
@@ -198,7 +213,7 @@ function transformedValue(
 
 function metadataValue(value: unknown): ProducedValue {
 	if (typeof value === "string") {
-		if (ISO_DATETIME_RE.test(value) && !Number.isNaN(Date.parse(value))) {
+		if (isoDateTime.safeParse(value).success) {
 			return { kind: "datetime", options: [value] };
 		}
 		return { kind: "string", options: [value] };
@@ -229,13 +244,20 @@ function accepts(field: FieldSchemaInfo, value: ProducedValue): boolean {
 		case "slug":
 			return TEXT_KINDS.has(value.kind);
 		case "url":
-			return value.kind === "url" || value.kind === "string";
+			return (
+				value.kind === "url" ||
+				(value.kind === "string" && value.options !== undefined && value.options.every(isSafeHref))
+			);
 		case "number":
-			return value.kind === "number";
+			return (
+				value.kind === "number" &&
+				(value.options ?? []).every((option) => Number.isFinite(Number(option)))
+			);
 		case "integer":
 			return (
 				value.kind === "number" &&
-				(value.options ?? []).every((option) => Number.isInteger(Number(option)))
+				value.options !== undefined &&
+				value.options.every((option) => Number.isSafeInteger(Number(option)))
 			);
 		case "boolean":
 			return value.kind === "boolean";
@@ -302,7 +324,7 @@ export function applyTransform(value: unknown, transform?: ContentMappingTransfo
 			return toDisplayString(value);
 		case "number": {
 			const num = Number(value);
-			return Number.isNaN(num) ? undefined : num;
+			return Number.isFinite(num) ? num : undefined;
 		}
 		case "date": {
 			const parsed = Date.parse(toDisplayString(value));

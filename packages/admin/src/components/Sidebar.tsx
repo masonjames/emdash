@@ -12,6 +12,8 @@ import { useCurrentUser } from "../lib/api/current-user";
 import { resolvePluginPagePath, usePluginAdmins } from "../lib/plugin-context";
 import {
 	groupNavItems,
+	joinsContentFolder,
+	normalizeGroup,
 	taxonomyGroup,
 	type GroupableNavItem,
 	type NavEntry,
@@ -71,6 +73,14 @@ export function filterNavItemsByRole<T extends { minRole?: number }>(
 	return items.filter((item) => !item.minRole || userRole >= item.minRole);
 }
 
+function filterHiddenNavItems<T extends { navId?: string }>(
+	items: T[],
+	hidden: readonly string[] | undefined,
+): T[] {
+	if (!hidden?.length) return items;
+	return items.filter((item) => !item.navId || !hidden.includes(item.navId));
+}
+
 /**
  * Manifest collections that get an auto-generated sidebar entry and dashboard
  * quick action, in manifest order. Pure function — exported so tests can pin
@@ -99,6 +109,7 @@ export interface SidebarNavProps {
 					path: string;
 					label?: string;
 					icon?: string;
+					group?: string;
 				}>;
 				dashboardWidgets?: Array<{ id: string; title?: string }>;
 				version?: string;
@@ -124,6 +135,7 @@ export interface SidebarNavProps {
 			siteName?: string;
 			footerLabel?: string | false;
 			favicon?: string;
+			hiddenNavItems?: string[];
 		};
 	};
 }
@@ -147,10 +159,12 @@ export interface NavItem extends GroupableNavItem {
 	minRole?: number;
 	/** Optional badge count (e.g., pending comments) */
 	badge?: number;
+	/** Name under which `admin.hiddenNavItems` can hide this built-in entry */
+	navId?: string;
 }
 
-/** Folder member order: collections, then their taxonomies. */
-const GROUP_RANK = { collection: 0, taxonomy: 1 } as const;
+/** Folder member order: collections, then their taxonomies, then plugin pages. */
+const GROUP_RANK = { collection: 0, taxonomy: 1, pluginPage: 2 } as const;
 
 const FOLDER_STATE_STORAGE_KEY = "emdash-sidebar-folders";
 
@@ -403,7 +417,7 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 		queryFn: fetchCommentCounts,
 		staleTime: 60 * 1000,
 		retry: false,
-		enabled: userRole >= ROLE_EDITOR,
+		enabled: userRole >= ROLE_EDITOR && !manifest.admin?.hiddenNavItems?.includes("comments"),
 	});
 
 	// --- Build nav item groups ---
@@ -422,10 +436,18 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 			params: { collection: name },
 		});
 	}
-	contentItems.push({ to: "/media", label: t`Media`, icon: ADMIN_NAV_ICONS.media });
+	contentItems.push({
+		to: "/media",
+		label: t`Media`,
+		icon: ADMIN_NAV_ICONS.media,
+		navId: "media",
+	});
 
 	const collectionGroups = new Map(
 		visibleCollectionEntries(manifest.collections).map(([name, config]) => [name, config.group]),
+	);
+	const contentGroups = new Set(
+		Array.from(collectionGroups.values(), normalizeGroup).filter((group) => group !== undefined),
 	);
 
 	const manageItems: NavItem[] = [
@@ -435,17 +457,43 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 			icon: ADMIN_NAV_ICONS.comments,
 			minRole: ROLE_EDITOR,
 			badge: commentCounts?.pending,
+			navId: "comments",
 		},
-		{ to: "/menus", label: t`Menus`, icon: ADMIN_NAV_ICONS.menus, minRole: ROLE_EDITOR },
+		{
+			to: "/menus",
+			label: t`Menus`,
+			icon: ADMIN_NAV_ICONS.menus,
+			minRole: ROLE_EDITOR,
+			navId: "menus",
+		},
 		{
 			to: "/redirects",
 			label: t`Redirects`,
 			icon: ADMIN_NAV_ICONS.redirects,
 			minRole: ROLE_ADMIN,
+			navId: "redirects",
 		},
-		{ to: "/widgets", label: t`Widgets`, icon: ADMIN_NAV_ICONS.widgets, minRole: ROLE_EDITOR },
-		{ to: "/sections", label: t`Sections`, icon: ADMIN_NAV_ICONS.sections, minRole: ROLE_EDITOR },
-		{ to: "/bylines", label: t`Bylines`, icon: ADMIN_NAV_ICONS.bylines, minRole: ROLE_EDITOR },
+		{
+			to: "/widgets",
+			label: t`Widgets`,
+			icon: ADMIN_NAV_ICONS.widgets,
+			minRole: ROLE_EDITOR,
+			navId: "widgets",
+		},
+		{
+			to: "/sections",
+			label: t`Sections`,
+			icon: ADMIN_NAV_ICONS.sections,
+			minRole: ROLE_EDITOR,
+			navId: "sections",
+		},
+		{
+			to: "/bylines",
+			label: t`Bylines`,
+			icon: ADMIN_NAV_ICONS.bylines,
+			minRole: ROLE_EDITOR,
+			navId: "bylines",
+		},
 	];
 	for (const tax of getSidebarTaxonomies(
 		manifest.taxonomies,
@@ -500,6 +548,7 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 			label: t`Import`,
 			icon: ADMIN_NAV_ICONS.import,
 			minRole: ROLE_ADMIN,
+			navId: "import",
 		},
 		{ to: "/settings", label: t`Settings`, icon: Gear, minRole: ROLE_ADMIN },
 	);
@@ -514,21 +563,35 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 				if (!isBlocksMode && !resolvePluginPagePath(pluginPages, page.path)) continue;
 				if (!isSafePluginPagePath(page.path)) continue;
 				const label = resolvePluginPageLabel(page.label, pluginId, (id) => i18n._(id));
-				pluginItems.push({
+				const group = normalizeGroup(page.group);
+				const item: NavItem = {
 					to: `/plugins/${pluginId}${normalizePluginPagePath(page.path)}`,
 					label,
 					icon: resolveNavIcon(page.icon),
-				});
+					iconName: page.icon,
+					group,
+					groupRank: GROUP_RANK.pluginPage,
+				};
+				(joinsContentFolder(group, contentGroups) ? contentItems : pluginItems).push(item);
 			}
 		}
 	}
 
+	const hiddenNavItems = manifest.admin?.hiddenNavItems;
 	const visibleContent = groupNavItems(
-		filterNavItemsByRole(contentItems, userRole).filter((i) => i.to !== "/"),
+		filterHiddenNavItems(filterNavItemsByRole(contentItems, userRole), hiddenNavItems).filter(
+			(i) => i.to !== "/",
+		),
 	);
-	const visibleManage = filterNavItemsByRole(manageItems, userRole);
-	const visibleAdmin = filterNavItemsByRole(adminItems, userRole);
-	const visiblePlugins = filterNavItemsByRole(pluginItems, userRole);
+	const visibleManage = filterHiddenNavItems(
+		filterNavItemsByRole(manageItems, userRole),
+		hiddenNavItems,
+	);
+	const visibleAdmin = filterHiddenNavItems(
+		filterNavItemsByRole(adminItems, userRole),
+		hiddenNavItems,
+	);
+	const visiblePlugins = groupNavItems(filterNavItemsByRole(pluginItems, userRole));
 
 	const folders = useFolderState();
 
@@ -598,7 +661,7 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 							item={{ to: "/", label: t`Dashboard`, icon: ADMIN_NAV_ICONS.dashboard }}
 							isActive={isItemActive("/", currentPath)}
 						/>
-						{userRole >= ROLE_CONTRIBUTOR && (
+						{userRole >= ROLE_CONTRIBUTOR && !hiddenNavItems?.includes("calendar") && (
 							<NavMenuLink
 								item={{ to: "/calendar", label: t`Calendar`, icon: ADMIN_NAV_ICONS.calendar }}
 								isActive={isItemActive("/calendar", currentPath)}
@@ -608,7 +671,7 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 				</KumoSidebar.Group>
 
 				{/* Content — collections + media */}
-				{visibleContent.length > 1 && (
+				{visibleCollectionEntries(manifest.collections).length > 0 && (
 					<KumoSidebar.Group>
 						<KumoSidebar.GroupLabel>{t`Content`}</KumoSidebar.GroupLabel>
 						<KumoSidebar.Menu>{renderNavEntries(visibleContent)}</KumoSidebar.Menu>
@@ -635,7 +698,7 @@ export function SidebarNav({ manifest }: SidebarNavProps) {
 				{visiblePlugins.length > 0 && (
 					<KumoSidebar.Group>
 						<KumoSidebar.GroupLabel>{t`Plugins`}</KumoSidebar.GroupLabel>
-						<KumoSidebar.Menu>{renderNavItems(visiblePlugins)}</KumoSidebar.Menu>
+						<KumoSidebar.Menu>{renderNavEntries(visiblePlugins)}</KumoSidebar.Menu>
 					</KumoSidebar.Group>
 				)}
 			</KumoSidebar.Content>

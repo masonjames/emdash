@@ -1,7 +1,8 @@
 /**
  * Form CRUD route handlers.
  *
- * Admin-only routes for managing form definitions.
+ * `forms/list` also serves editors (`plugins:read`), without the webhook URL. Creating,
+ * updating, duplicating and deleting forms stay admin-only (`plugins:manage`).
  */
 
 import type { RouteContext, StorageCollection } from "emdash";
@@ -9,6 +10,7 @@ import { PluginRouteError } from "emdash";
 import { ulid } from "ulidx";
 
 import { validateContentMapping } from "../content-mapping.js";
+import { digestTaskName } from "../digest-task.js";
 import type {
 	FormCreateInput,
 	FormDeleteInput,
@@ -28,14 +30,30 @@ function submissions(ctx: RouteContext): StorageCollection {
 
 // ─── List Forms ──────────────────────────────────────────────────
 
+/** `Role.ADMIN` from @emdash-cms/auth; plugins do not depend on that package. */
+export const ADMIN_ROLE = 50;
+
+/** The webhook URL is a credential (for Slack or Discord it is all anyone needs to post). */
+function withoutWebhookUrl(form: FormDefinition): FormDefinition {
+	const settings = { ...form.settings };
+	delete settings.webhookUrl;
+	return { ...form, settings };
+}
+
 export async function formsListHandler(ctx: RouteContext) {
 	const result = await forms(ctx).query({
 		orderBy: { createdAt: "desc" },
 		limit: 100,
 	});
 
+	// No user (token without a bound user) is treated like a non-admin.
+	const isAdmin = (ctx.user?.role ?? 0) >= ADMIN_ROLE;
+
 	return {
-		items: result.items.map((item) => ({ id: item.id, ...item.data })),
+		items: result.items.map((item) => ({
+			id: item.id,
+			...(isAdmin ? item.data : withoutWebhookUrl(item.data)),
+		})),
 		hasMore: result.hasMore,
 		cursor: result.cursor,
 	};
@@ -94,7 +112,7 @@ export async function formsCreateHandler(ctx: RouteContext<FormCreateInput>) {
 
 	// Schedule digest cron if enabled
 	if (form.settings.digestEnabled && ctx.cron) {
-		await ctx.cron.schedule(`digest:${id}`, {
+		await ctx.cron.schedule(digestTaskName(id), {
 			schedule: `0 ${form.settings.digestHour} * * *`,
 		});
 	}
@@ -141,8 +159,11 @@ export async function formsUpdateHandler(ctx: RouteContext<FormUpdateInput>) {
 	if (updated.settings.redirectUrl === "") updated.settings.redirectUrl = undefined;
 	if (updated.settings.webhookUrl === "") updated.settings.webhookUrl = undefined;
 
-	// Validated after the merge so page edits that break a stored mapping are caught.
-	if (updated.settings.contentMapping) {
+	const pagesChanged = JSON.stringify(updated.pages) !== JSON.stringify(existing.pages);
+	const mappingChanged =
+		JSON.stringify(updated.settings.contentMapping) !==
+		JSON.stringify(existing.settings.contentMapping);
+	if (updated.settings.contentMapping && (pagesChanged || mappingChanged)) {
 		await validateContentMapping(ctx, updated.settings.contentMapping, updated.pages);
 	}
 
@@ -151,16 +172,16 @@ export async function formsUpdateHandler(ctx: RouteContext<FormUpdateInput>) {
 	// Update digest cron if settings changed
 	if (ctx.cron) {
 		if (updated.settings.digestEnabled && !existing.settings.digestEnabled) {
-			await ctx.cron.schedule(`digest:${input.id}`, {
+			await ctx.cron.schedule(digestTaskName(input.id), {
 				schedule: `0 ${updated.settings.digestHour} * * *`,
 			});
 		} else if (!updated.settings.digestEnabled && existing.settings.digestEnabled) {
-			await ctx.cron.cancel(`digest:${input.id}`);
+			await ctx.cron.cancel(digestTaskName(input.id));
 		} else if (
 			updated.settings.digestEnabled &&
 			updated.settings.digestHour !== existing.settings.digestHour
 		) {
-			await ctx.cron.schedule(`digest:${input.id}`, {
+			await ctx.cron.schedule(digestTaskName(input.id), {
 				schedule: `0 ${updated.settings.digestHour} * * *`,
 			});
 		}
@@ -186,7 +207,7 @@ export async function formsDeleteHandler(ctx: RouteContext<FormDeleteInput>) {
 
 	// Cancel digest cron
 	if (ctx.cron) {
-		await ctx.cron.cancel(`digest:${input.id}`).catch(() => {});
+		await ctx.cron.cancel(digestTaskName(input.id)).catch(() => {});
 	}
 
 	await forms(ctx).delete(input.id);
@@ -233,6 +254,13 @@ export async function formsDuplicateHandler(ctx: RouteContext<FormDuplicateInput
 	}
 
 	await forms(ctx).put(id, duplicate);
+
+	// The copy carries the digest setting, so it needs its own task
+	if (duplicate.settings.digestEnabled && ctx.cron) {
+		await ctx.cron.schedule(digestTaskName(id), {
+			schedule: `0 ${duplicate.settings.digestHour} * * *`,
+		});
+	}
 
 	return { id, ...duplicate };
 }

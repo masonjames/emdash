@@ -77,6 +77,7 @@ import {
 	ImageSquare,
 	Rows,
 	SlidersHorizontal,
+	Subtitles,
 	TextAa,
 	Minus,
 	LinkBreak,
@@ -85,6 +86,7 @@ import {
 	CodeBlock,
 	Stack,
 	Table as TableIcon,
+	VideoCamera,
 	Plus,
 	Trash,
 	RowsPlusBottom,
@@ -131,7 +133,11 @@ import { htmlBlockFields } from "../html-block";
 import type { MediaItem } from "../lib/api";
 import type { Section } from "../lib/api";
 import { fetchMediaItem, uploadMedia } from "../lib/api/media.js";
-import { canonicalMediaProviderId, localMediaFileUrl } from "../lib/media-utils.js";
+import {
+	canonicalMediaProviderId,
+	dropsDisplayHeight,
+	localMediaFileUrl,
+} from "../lib/media-utils.js";
 import {
 	UnsupportedPortableTextMarksError,
 	assertPortableTextMarksSupported,
@@ -218,6 +224,13 @@ import {
 	selectionTouchesTable,
 } from "./editor/TableExtensions.js";
 import { createTableResize } from "./editor/TableResize.js";
+import {
+	VideoExtension,
+	isVideoBlock,
+	mediaItemToVideoAttrs,
+	videoBlockFields,
+	videoNodeAttrs,
+} from "./editor/VideoNode";
 import { MediaPickerModal } from "./MediaPickerModal";
 import { NonListFieldValue, isNonListValue } from "./NonListFieldValue.js";
 import { SectionPickerModal } from "./SectionPickerModal";
@@ -612,6 +625,23 @@ function customBlockIdentityField(block: PortableTextBlock): "id" | "url" | unde
 	return undefined;
 }
 
+/**
+ * TrailingNode adds an empty paragraph after a final block on the first
+ * transaction. It isn't content: `prosemirrorToPortableText` drops it too.
+ */
+function withoutTrailingEmptyParagraph(doc: ProseMirrorNode): ProseMirrorNode {
+	const last = doc.lastChild;
+	if (
+		doc.childCount > 1 &&
+		last?.type.name === "paragraph" &&
+		last.childCount === 0 &&
+		portableTextKeyFromAttrs(last.attrs) === undefined
+	) {
+		return doc.copy(doc.content.cut(0, doc.content.size - last.nodeSize));
+	}
+	return doc;
+}
+
 function equalJsonValues(left: unknown, right: unknown): boolean {
 	if (Object.is(left, right)) return true;
 	if (Array.isArray(left) || Array.isArray(right)) {
@@ -646,6 +676,7 @@ const PortableTextIdentityExtension = Extension.create({
 					"htmlBlock",
 					"iframeBlock",
 					"image",
+					"videoBlock",
 					"horizontalRule",
 					"gallery",
 					"table",
@@ -999,6 +1030,13 @@ function convertPMNode(
 				...iframeEmbedFromAttrs(node.attrs ?? {}),
 			};
 
+		case "videoBlock":
+			return {
+				_type: "video",
+				_key: portableTextKeyFromAttrs(node.attrs) ?? generateKey(),
+				...videoBlockFields(node.attrs ?? {}),
+			};
+
 		case "image": {
 			const attrs = node.attrs ?? {};
 			const provider = attrStr(attrs.provider);
@@ -1330,6 +1368,10 @@ function isTextBlock(block: PortableTextBlock): block is PortableTextTextBlock {
 	return block._type === "block";
 }
 
+function isQuoteBlock(block: PortableTextBlock): block is PortableTextTextBlock {
+	return isTextBlock(block) && !block.listItem && block.style === "blockquote";
+}
+
 /** A built-in `iframe` block. Any other belongs to a plugin and stays a plugin block. */
 function isIframeBlock(block: PortableTextBlock): block is PortableTextIframeBlock {
 	return block._type === "iframe" && isBuiltInIframeBlock(block);
@@ -1395,6 +1437,14 @@ function portableTextToProsemirror(
 			}
 
 			content.push(convertPTList(listBlocks, listType, `root:${runStart}`));
+		} else if (isQuoteBlock(block)) {
+			// Portable Text stores each paragraph of a quote as its own block.
+			const quoteBlocks: PortableTextTextBlock[] = [];
+			while (i < blocks.length && isQuoteBlock(blocks[i]!)) {
+				quoteBlocks.push(blocks[i] as PortableTextTextBlock);
+				i++;
+			}
+			content.push(convertPTQuote(quoteBlocks));
 		} else {
 			const converted = convertPTBlock(block, `root:${i}`, pluginTypes);
 			if (converted) {
@@ -1467,16 +1517,7 @@ function convertPTBlock(
 					};
 				}
 				case "blockquote":
-					return {
-						type: "blockquote",
-						attrs: attrsWithPortableTextKey(undefined, block._key),
-						content: [
-							{
-								type: "paragraph",
-								content: pmContent.length > 0 ? pmContent : undefined,
-							},
-						],
-					};
+					return convertPTQuote([block]);
 				default:
 					return {
 						type: "paragraph",
@@ -1598,6 +1639,14 @@ function convertPTBlock(
 					}
 				: convertCustomBlock(block);
 
+		case "video":
+			return isVideoBlock(block) && !pluginTypes.has("video")
+				? {
+						type: "videoBlock",
+						attrs: attrsWithPortableTextKey(videoNodeAttrs(block), block._key),
+					}
+				: convertCustomBlock(block);
+
 		case "table": {
 			const result = portableTextTableToProseMirror(block, {
 				path,
@@ -1615,6 +1664,23 @@ function convertPTBlock(
 			return convertCustomBlock(block);
 		}
 	}
+}
+
+/** One quote from consecutive quote blocks, one paragraph each. */
+function convertPTQuote(blocks: PortableTextTextBlock[]): unknown {
+	return {
+		type: "blockquote",
+		attrs: attrsWithPortableTextKey(undefined, blocks[0]!._key),
+		content: blocks.map((block, index) => {
+			const content = convertPTSpans(block.children, block.markDefs ?? []);
+			return {
+				type: "paragraph",
+				// The first paragraph is saved under the quote's key.
+				...(index > 0 ? { attrs: attrsWithPortableTextKey(undefined, block._key) } : {}),
+				content: content.length > 0 ? content : undefined,
+			};
+		}),
+	};
 }
 
 function convertCustomBlock(block: PortableTextBlock): unknown {
@@ -2068,7 +2134,7 @@ const iframeSlashCommand: SlashCommandItem = {
 	title: msg`Iframe`,
 	description: msg`Embed a page from another site`,
 	icon: FrameCorners,
-	aliases: ["embed", "youtube", "vimeo", "video", "map"],
+	aliases: ["embed", "youtube", "vimeo", "map"],
 	category: EMBEDS_CATEGORY,
 	command: ({ editor, range }) => insertIframeBlock(editor, range),
 };
@@ -2657,6 +2723,7 @@ function PluginBlockModal({
 							))
 						) : (
 							<Input
+								dir="ltr"
 								ref={inputRef}
 								type="url"
 								className="w-full"
@@ -2695,6 +2762,7 @@ function BlockKitField({
 	value: unknown;
 	onChange: (actionId: string, value: unknown) => void;
 }) {
+	const id = React.useId();
 	switch (field.type) {
 		case "text_input": {
 			const multiline = !!field.multiline;
@@ -2702,9 +2770,13 @@ function BlockKitField({
 			const Tag = multiline ? "textarea" : "input";
 			return (
 				<div>
-					<label className="text-sm font-medium mb-1.5 block">{field.label}</label>
+					<label id={`${id}-label`} htmlFor={id} className="text-sm font-medium mb-1.5 block">
+						{field.label}
+					</label>
 					{multiline ? (
 						<Tag
+							id={id}
+							aria-labelledby={`${id}-label`}
 							className="flex w-full rounded-md border border-kumo-line bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-kumo-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-2 min-h-[80px]"
 							placeholder={placeholder}
 							value={typeof value === "string" ? value : ""}
@@ -2712,6 +2784,8 @@ function BlockKitField({
 						/>
 					) : (
 						<Input
+							id={id}
+							aria-labelledby={`${id}-label`}
 							type="text"
 							className="w-full"
 							placeholder={placeholder}
@@ -2727,8 +2801,12 @@ function BlockKitField({
 			const max = typeof field.max === "number" ? field.max : undefined;
 			return (
 				<div>
-					<label className="text-sm font-medium mb-1.5 block">{field.label}</label>
+					<label id={`${id}-label`} htmlFor={id} className="text-sm font-medium mb-1.5 block">
+						{field.label}
+					</label>
 					<Input
+						id={id}
+						aria-labelledby={`${id}-label`}
 						type="number"
 						className="w-full"
 						min={min}
@@ -2747,6 +2825,7 @@ function BlockKitField({
 		case "toggle": {
 			return (
 				<Switch
+					aria-label={field.label}
 					checked={!!value}
 					onCheckedChange={(checked) => onChange(field.action_id, checked)}
 					label={<span className="text-sm font-medium">{field.label}</span>}
@@ -2811,6 +2890,7 @@ function BlockKitRepeater({
 	onChange: (actionId: string, value: unknown) => void;
 }) {
 	const { t } = useLingui();
+	const labelId = React.useId();
 	const rawItems = React.useMemo<unknown[]>(() => (Array.isArray(value) ? value : []), [value]);
 
 	const [items, setItems] = React.useState<RepeaterItem[]>(() => ensureKeys(rawItems));
@@ -2921,14 +3001,14 @@ function BlockKitRepeater({
 	};
 
 	return (
-		<div className="space-y-2">
+		<div role="group" aria-labelledby={labelId} className="space-y-2">
 			<div className="flex items-center justify-between">
-				<label className="text-sm font-medium">
+				<span id={labelId} className="text-sm font-medium">
 					{field.label}
 					{items.length > 0 && (
 						<span className="ms-2 text-kumo-subtle font-normal">({items.length})</span>
 					)}
-				</label>
+				</span>
 				{canAdd && (
 					<Button variant="outline" size="sm" icon={<Plus />} onClick={handleAdd} type="button">
 						{addButtonLabel}
@@ -3093,6 +3173,7 @@ function DynamicSelect({
 	value: unknown;
 	onChange: (actionId: string, value: unknown) => void;
 }) {
+	const labelId = React.useId();
 	const [dynamicOptions, setDynamicOptions] = React.useState<Array<{
 		label: string;
 		value: string;
@@ -3140,12 +3221,14 @@ function DynamicSelect({
 
 	return (
 		<div>
-			<label className="text-sm font-medium mb-1.5 block">{field.label}</label>
+			<span id={labelId} className="text-sm font-medium mb-1.5 block">
+				{field.label}
+			</span>
 			{loading ? (
 				<div className="flex h-10 items-center px-3 text-sm text-kumo-subtle">{t`Loading...`}</div>
 			) : (
 				<Select
-					aria-label={field.label}
+					aria-labelledby={labelId}
 					value={typeof value === "string" ? value : ""}
 					onValueChange={(v) => onChange(field.action_id, v ?? "")}
 					items={{
@@ -3458,6 +3541,8 @@ export function PortableTextEditor({
 	// Use a ref for onChange to avoid recreating the editor when the callback changes
 	const onChangeRef = React.useRef(onChange);
 	const lastPortableTextValueRef = React.useRef(value || []);
+	// The document last handed to onChange, starting from the loaded one.
+	const lastReportedDocRef = React.useRef<ProseMirrorNode | null>(null);
 	React.useEffect(() => {
 		onChangeRef.current = onChange;
 	}, [onChange]);
@@ -3466,6 +3551,8 @@ export function PortableTextEditor({
 
 	// Media picker state (for image insertion)
 	const [mediaPickerOpen, setMediaPickerOpen] = React.useState(false);
+
+	const [videoPickerOpen, setVideoPickerOpen] = React.useState(false);
 
 	// Multi-select media picker state (for gallery insertion)
 	const [galleryPickerOpen, setGalleryPickerOpen] = React.useState(false);
@@ -3501,6 +3588,7 @@ export function PortableTextEditor({
 	const uploadImageRef = React.useRef(async (file: File, signal: AbortSignal) => {
 		const item = await uploadMedia(file, { signal });
 		void queryClient.invalidateQueries({ queryKey: ["media"] });
+		if (file.type.startsWith("video/")) return mediaItemToVideoAttrs(item);
 		return mediaItemToImageAttrs({ ...item, url: item.url || localMediaFileUrl(item.storageKey) });
 	});
 
@@ -3571,6 +3659,8 @@ export function PortableTextEditor({
 		() => new Set(pluginBlocks.map((block) => block.type)),
 		[pluginBlocks],
 	);
+	const pluginBlockTypesRef = React.useRef(pluginBlockTypes);
+	pluginBlockTypesRef.current = pluginBlockTypes;
 
 	// Build slash commands
 	const slashCommands = React.useMemo(() => {
@@ -3617,21 +3707,36 @@ export function PortableTextEditor({
 					setGalleryPickerOpen(true);
 				},
 			},
-			topLevelInsert(htmlSlashCommand, insertHtmlBlock),
-			{
-				id: "section",
-				title: msg`Section`,
-				description: msg`Insert a reusable section`,
-				icon: Stack,
-				aliases: ["pattern", "block", "template"],
-				category: ADVANCED_CATEGORY,
+		);
+		// A plugin's own video block replaces the built-in one.
+		if (!pluginBlockTypes.has("video")) {
+			cmds.push({
+				id: "video",
+				title: msg`Video`,
+				description: msg`Upload or choose a video`,
+				icon: VideoCamera,
+				aliases: ["movie", "clip", "mp4", "film"],
+				category: MEDIA_CATEGORY,
 				deferInsertion: true,
 				command: ({ editor, range }) => {
 					editor.chain().focus().deleteRange(range).run();
-					setSectionPickerOpen(true);
+					setVideoPickerOpen(true);
 				},
+			});
+		}
+		cmds.push(topLevelInsert(htmlSlashCommand, insertHtmlBlock), {
+			id: "section",
+			title: msg`Section`,
+			description: msg`Insert a reusable section`,
+			icon: Stack,
+			aliases: ["pattern", "block", "template"],
+			category: ADVANCED_CATEGORY,
+			deferInsertion: true,
+			command: ({ editor, range }) => {
+				editor.chain().focus().deleteRange(range).run();
+				setSectionPickerOpen(true);
 			},
-		);
+		});
 		// A plugin's own iframe block replaces the built-in one.
 		if (!pluginBlockTypes.has("iframe")) {
 			cmds.push(topLevelInsert(iframeSlashCommand, insertIframeBlock));
@@ -3722,12 +3827,24 @@ export function PortableTextEditor({
 	 * Hands the document to `onChange` as Portable Text. While the slash line
 	 * the block insert button typed is open, changes wait until its menu
 	 * closes, so the line alone isn't an edit for autosave to save.
+	 *
+	 * Documents are compared rather than their Portable Text: stored content
+	 * the converter would write in a different shape (empty `markDefs`, a
+	 * missing `style`, fields it doesn't map) is unchanged until the document is.
 	 */
 	const reportChange = React.useCallback((changedEditor: Editor) => {
 		const cb = onChangeRef.current;
 		if (!cb) return;
 		if (insertedLineRef.current && SuggestionPluginKey.getState(changedEditor.state)?.active)
 			return;
+		lastReportedDocRef.current ??= changedEditor.schema.nodeFromJSON(initialContent);
+		if (
+			withoutTrailingEmptyParagraph(changedEditor.state.doc).eq(
+				withoutTrailingEmptyParagraph(lastReportedDocRef.current),
+			)
+		)
+			return;
+		lastReportedDocRef.current = changedEditor.state.doc;
 		const doc = changedEditor.getJSON();
 		// TipTap's getJSON() returns JSONContent which is structurally compatible
 		const pmDoc = doc as Parameters<typeof prosemirrorToPortableText>[0];
@@ -3778,7 +3895,11 @@ export function PortableTextEditor({
 				link: {
 					shouldAutoLink: (url) => URL_SCHEME_REGEX.test(url) || WWW_PREFIX_REGEX.test(url),
 					openOnClick: false,
+					// TipTap's Link extension defaults HTMLAttributes.target to "_blank".
+					// Without an explicit override every link created via setLink would be
+					// serialized as blank: true, even though there is no UI to enable it.
 					HTMLAttributes: {
+						target: null,
 						class: "text-kumo-link underline",
 					},
 				},
@@ -3790,10 +3911,13 @@ export function PortableTextEditor({
 			CodeBlockExtension,
 			HtmlBlockExtension,
 			IframeBlockExtension,
+			VideoExtension,
 			GalleryExtension,
 			ImageExtension,
 			ImageUploadExtension.configure({
 				upload: (file, signal) => uploadImageRef.current(file, signal),
+				// A plugin's own video block replaces the built-in one.
+				acceptsVideo: () => !pluginBlockTypesRef.current.has("video"),
 			}),
 			MarkdownLinkExtension,
 			PluginBlockExtension,
@@ -4150,6 +4274,23 @@ export function PortableTextEditor({
 		};
 	}, [editor]);
 
+	// A picker can stay open while an upload lands, so the insert position follows the document.
+	React.useEffect(() => {
+		if (!editor) return;
+		const follow = ({ transaction, appendedTransactions }: EditorEvents["transaction"]) => {
+			const position = pendingBlockInsertPosRef.current;
+			if (position === null) return;
+			pendingBlockInsertPosRef.current = [transaction, ...appendedTransactions].reduce(
+				(pos, tr) => tr.mapping.map(pos, -1),
+				position,
+			);
+		};
+		editor.on("transaction", follow);
+		return () => {
+			editor.off("transaction", follow);
+		};
+	}, [editor]);
+
 	// Handle image selection from media picker
 	const handleImageSelect = React.useCallback(
 		(item: MediaItem) => {
@@ -4169,6 +4310,20 @@ export function PortableTextEditor({
 			}
 			pendingBlockInsertPosRef.current = null;
 			setMediaPickerOpen(false);
+		},
+		[editor],
+	);
+
+	const handleVideoSelect = React.useCallback(
+		(item: MediaItem) => {
+			if (editor?.isEditable) {
+				const video = editor.schema.nodes.videoBlock!.create(mediaItemToVideoAttrs(item));
+				const position = pendingBlockInsertPosRef.current ?? undefined;
+				insertTopLevelBlock(editor, video, undefined, position);
+				editor.view.focus();
+			}
+			pendingBlockInsertPosRef.current = null;
+			setVideoPickerOpen(false);
 		},
 		[editor],
 	);
@@ -4548,6 +4703,20 @@ export function PortableTextEditor({
 					mimeTypeFilter="image/"
 					title={t`Select image`}
 					confirmLabel={t`Insert image`}
+				/>
+
+				<MediaPickerModal
+					open={videoPickerOpen}
+					onOpenChange={(open) => {
+						setVideoPickerOpen(open);
+						if (!open) pendingBlockInsertPosRef.current = null;
+					}}
+					onSelect={handleVideoSelect}
+					mimeTypeFilter="video/"
+					mediaKind="video"
+					localOnly
+					title={t`Select video`}
+					confirmLabel={t`Insert video`}
 				/>
 
 				{/* Multi-select media picker for gallery insertion */}
@@ -5300,6 +5469,7 @@ function ImageBubbleMenu({
 				alt: typeof attrs?.alt === "string" ? attrs.alt : "",
 				alignment: (attrs?.alignment as string | null | undefined) ?? null,
 				link: (attrs?.link as { href?: string } | null | undefined)?.href ?? "",
+				caption: typeof attrs?.caption === "string" ? attrs.caption : "",
 				mediaId:
 					typeof attrs?.mediaId === "string" &&
 					attrs.mediaId &&
@@ -5669,6 +5839,13 @@ function ImageBubbleMenu({
 							>
 								<LinkIcon className="h-4 w-4" aria-hidden="true" />
 							</BubbleButton>
+							<BubbleButton
+								onClick={() => getSelectedCaption()?.focus()}
+								active={Boolean(image.caption)}
+								title={image.caption ? t`Edit caption` : t`Add caption`}
+							>
+								<Subtitles className="h-4 w-4" aria-hidden="true" />
+							</BubbleButton>
 							{canOpenSettings && (
 								<BubbleButton onClick={toggleSettings} title={t`Image settings`}>
 									<SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
@@ -5692,11 +5869,17 @@ function ImageBubbleMenu({
 					setPickerOpen(open);
 				}}
 				onSelect={(item) => {
-					if (!getSelectedImage(editor.state)) return;
+					const selected = getSelectedImage(editor.state);
+					if (!selected) return;
 					if (canonicalMediaProviderId(item.provider) === "local") {
 						queryClient.setQueryData(["media", item.id], item);
 					}
-					const attrs = { ...mediaItemToImageAttrs(item), caption: undefined, title: undefined };
+					const attrs = {
+						...mediaItemToImageAttrs(item),
+						caption: undefined,
+						title: undefined,
+						...(dropsDisplayHeight(selected.node.attrs, item) ? { displayHeight: undefined } : {}),
+					};
 					editor.chain().updateAttributes("image", attrs).run();
 				}}
 				mimeTypeFilter="image/"
@@ -5969,8 +6152,8 @@ function EditorToolbar({
 	React.useEffect(() => {
 		const sentinel = stuckSentinelRef.current;
 		if (!sentinel) return;
-		const observer = new IntersectionObserver(([entry]) =>
-			setStuck(entry?.isIntersecting === false),
+		const observer = new IntersectionObserver((entries) =>
+			setStuck(entries.at(-1)?.isIntersecting === false),
 		);
 		observer.observe(sentinel);
 		return () => observer.disconnect();

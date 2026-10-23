@@ -17,6 +17,7 @@ export const MEDIA_SEARCH_MAX_LENGTH = 200;
 
 export interface MediaUploadOptions {
 	signal?: AbortSignal;
+	folderId?: string | null;
 }
 
 export interface UploadMediaOptions extends MediaUploadOptions {
@@ -49,7 +50,12 @@ export interface MediaUsageOccurrenceDetail {
 	fieldSlug: string;
 	fieldPath: string;
 	occurrenceIndex: number;
-	referenceType: "image_field" | "file_field" | "portable_text_image" | "unknown";
+	referenceType:
+		| "image_field"
+		| "file_field"
+		| "portable_text_image"
+		| "portable_text_video"
+		| "unknown";
 }
 
 export interface MediaUsageSourceDetail {
@@ -677,6 +683,7 @@ export interface MediaProviderItem {
 	/** LQIP dominant-color placeholder, as a CSS color (images only) */
 	dominantColor?: string;
 	alt?: string;
+	caption?: string;
 	previewUrl?: string;
 	meta?: Record<string, unknown>;
 }

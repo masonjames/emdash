@@ -248,6 +248,10 @@ function createTestContext<TInput>(
 // ─── Transforms ──────────────────────────────────────────────────
 
 describe("applyTransform", () => {
+	it.each(["Infinity", "1e999", Infinity])("skips non-finite number transforms: %s", (value) => {
+		expect(applyTransform(value, "number")).toBeUndefined();
+	});
+
 	it("passes values through without a transform", () => {
 		expect(applyTransform("hello")).toBe("hello");
 		expect(applyTransform(5)).toBe(5);
@@ -473,6 +477,20 @@ describe("validateContentMapping", () => {
 		);
 	});
 
+	it("rejects two form fields that overwrite the same target", async () => {
+		const { ctx } = createTestContext(undefined);
+		await expect(
+			validateContentMapping(
+				ctx,
+				{
+					...validMapping,
+					fieldMappings: { event_title: "title", event_details: "title" },
+				},
+				formPages,
+			),
+		).rejects.toThrow(/field "title".*mapped more than once/);
+	});
+
 	it("rejects a mapping from a file field", async () => {
 		const { ctx } = createTestContext(undefined);
 		const pages: FormPage[] = [
@@ -534,6 +552,9 @@ describe("validateContentMapping value compatibility", () => {
 			schemaField("name", "text", true),
 			schemaField("price", "number", true),
 			schemaField("stock", "number"),
+			schemaField("quantity", "integer"),
+			schemaField("website", "url"),
+			schemaField("body", "portableText"),
 			schemaField("available_from", "datetime"),
 			{ ...schemaField("category", "select"), validation: { options: ["news", "sports"] } },
 			{ ...schemaField("tags", "multiSelect"), validation: { options: ["news", "sports"] } },
@@ -655,6 +676,55 @@ describe("validateContentMapping value compatibility", () => {
 		);
 	});
 
+	it("rejects a number form field mapped to an integer target", async () => {
+		await expect(
+			validate({
+				...base,
+				fieldMappings: { name: "name", price: "quantity" },
+				metadata: { price: 10 },
+			}),
+		).rejects.toThrow(/to field "quantity" \(integer\)/);
+	});
+
+	it("rejects free text mapped to a URL target", async () => {
+		await expect(
+			validate({
+				...base,
+				fieldMappings: { ...base.fieldMappings, price_text: "website" },
+			}),
+		).rejects.toThrow(/to field "website" \(url\)/);
+	});
+
+	it.each<[string, unknown]>([
+		["quantity", 1.5],
+		["quantity", Number.MAX_SAFE_INTEGER + 1],
+		["stock", ""],
+		["stock", Infinity],
+		["website", "not a URL"],
+		["website", "javascript:alert(1)"],
+		["available_from", "2026-08-01T10:00:00"],
+		["available_from", "2026-02-30T10:00:00Z"],
+		["body", [{}]],
+		["body", [null]],
+	])("rejects invalid fixed metadata for %s: %j", async (field, value) => {
+		await expect(validate({ ...base, metadata: { [field]: value } })).rejects.toThrow(
+			/is not a valid/,
+		);
+	});
+
+	it.each<[string, unknown]>([
+		["quantity", 2],
+		["website", "https://example.com/event"],
+		["website", "/events"],
+		["website", "mailto:editor@example.com"],
+		["available_from", "2026-08-01T10:00:00+02:00"],
+		["body", []],
+		["body", [{ _type: "block", children: [{ _type: "span", text: "Hello" }] }]],
+		["stock", null],
+	])("accepts valid fixed metadata for %s: %j", async (field, value) => {
+		await expect(validate({ ...base, metadata: { [field]: value } })).resolves.toBeUndefined();
+	});
+
 	it("accepts metadata that fits the target field", async () => {
 		await expect(
 			validate({
@@ -712,6 +782,43 @@ describe("formsCreateHandler with content mapping", () => {
 });
 
 describe("formsUpdateHandler with content mapping", () => {
+	it("allows pausing a form whose target collection no longer exists", async () => {
+		const input: FormUpdateInput = { id: "form-1", status: "paused" };
+		const { ctx, forms } = createTestContext(input, { collections: {} });
+		await forms.put(
+			"form-1",
+			makeForm({ settings: { ...makeForm().settings, contentMapping: validMapping } }),
+		);
+		const result = await formsUpdateHandler(ctx);
+		expect(result.status).toBe("paused");
+		expect(result.settings.contentMapping).toEqual(validMapping);
+	});
+
+	it("allows editor saves that resend unchanged pages and a stale mapping", async () => {
+		const existing = makeForm({
+			settings: { ...makeForm().settings, contentMapping: validMapping },
+		});
+		const input: FormUpdateInput = {
+			id: "form-1",
+			name: "Renamed form",
+			pages: structuredClone(existing.pages),
+			settings: { ...existing.settings, confirmationMessage: "Updated confirmation" },
+		};
+		const { ctx, forms } = createTestContext(input, { collections: {} });
+		await forms.put("form-1", existing);
+		const result = await formsUpdateHandler(ctx);
+		expect(result.name).toBe("Renamed form");
+		expect(result.settings.confirmationMessage).toBe("Updated confirmation");
+		expect(result.settings.contentMapping).toEqual(validMapping);
+	});
+
+	it("still rejects an explicitly supplied stale mapping", async () => {
+		const input: FormUpdateInput = { id: "form-1", settings: { contentMapping: validMapping } };
+		const { ctx, forms } = createTestContext(input, { collections: {} });
+		await forms.put("form-1", makeForm());
+		await expect(formsUpdateHandler(ctx)).rejects.toThrow(/unknown collection/);
+	});
+
 	it("rejects a page edit that breaks an existing mapping", async () => {
 		const input: FormUpdateInput = {
 			id: "form-1",

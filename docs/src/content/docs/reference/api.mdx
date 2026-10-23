@@ -16,6 +16,7 @@ The maintained templates call these runtime helpers:
 | Function | Used for |
 | -------- | -------- |
 | `decodeSlug` | Decoding a dynamic route parameter before lookup |
+| `getContentSeo` | Reading an entry's SEO panel values without template fallbacks |
 | `getEmDashCollection` | Reading and filtering entries in a collection |
 | `getEmDashEntry` | Reading one entry by ID or slug |
 | `getMenuWithCacheHint` | Rendering a navigation menu with cache invalidation |
@@ -425,6 +426,11 @@ const portableText = prosemirrorToPortableText(prosemirrorDoc);
 // From Portable Text to ProseMirror
 const prosemirrorDoc = portableTextToProsemirror(portableText);
 ```
+
+The ProseMirror document uses EmDash's own nodes for built-in blocks, such as `image`, `table`,
+`iframeBlock` and `videoBlock`. A TipTap editor that loads it needs those nodes in its schema, or it
+can't load documents that use them. A `videoBlock` node has the attributes `src`, `mediaId`,
+`provider`, `caption`, `width` and `height`.
 
 ## Site settings
 

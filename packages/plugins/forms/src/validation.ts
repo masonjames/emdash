@@ -6,6 +6,8 @@
  * validation is authoritative — never trust the client.
  */
 
+import { isSafeHref } from "emdash";
+
 import type { FieldType, FormField } from "./types.js";
 
 export interface ValidationError {
@@ -110,14 +112,15 @@ function validateFieldType(field: FormField, value: unknown): string | null {
 			if (!EMAIL_RE.test(strValue)) return `${field.label} must be a valid email address`;
 			break;
 		case "url":
-			if (!URL_RE.test(strValue)) return `${field.label} must be a valid URL`;
+			if (!URL_RE.test(strValue) || !isSafeHref(strValue))
+				return `${field.label} must be a valid URL`;
 			break;
 		case "tel":
 			if (!TEL_RE.test(strValue)) return `${field.label} must be a valid phone number`;
 			break;
 		case "number": {
 			const num = Number(value);
-			if (Number.isNaN(num)) return `${field.label} must be a number`;
+			if (!Number.isFinite(num)) return `${field.label} must be a number`;
 			break;
 		}
 		case "date":
@@ -189,7 +192,7 @@ function coerceValue(type: FieldType, value: unknown): unknown {
 		case "number":
 			return Number(value);
 		case "checkbox":
-			return value === "on" || value === "true" || value === true;
+			return value === "on" || value === "true" || value === "1" || value === true;
 		case "checkbox-group":
 			return Array.isArray(value) ? value : [value];
 		default:

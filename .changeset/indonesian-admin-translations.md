@@ -1,6 +1,5 @@
 ---
 "@emdash-cms/admin": patch
-"emdash": patch
 ---
 
-Adds Indonesian translations for the site domain-change flow, general settings screen, marketplace capability labels, and visual-editing toolbar strings.
+Updates Indonesian admin translations for newly added publishing date/time, SEO image, and sharing-related strings.
