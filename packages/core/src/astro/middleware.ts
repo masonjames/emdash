@@ -87,6 +87,7 @@ import {
 	requestEndedAuthenticated,
 } from "./middleware/scoped-db.js";
 import { wrapBodyForStreamMetrics } from "./middleware/stream-end-metrics.js";
+import { emdashTrailingSlashRewrite } from "./middleware/trailing-slash.js";
 import { prefetchLayoutData } from "./prefetch.js";
 import {
 	createPublicPluginApiRouteHandler,
@@ -841,6 +842,9 @@ function localsWaitUntil(locals: object): ((promise: Promise<unknown>) => void) 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const { request, locals, cookies } = context;
 	const url = context.url;
+
+	const slashed = emdashTrailingSlashRewrite(url, virtualConfig?.trailingSlash);
+	if (slashed) return context.rewrite(new Request(slashed, request));
 
 	// Fast path: routes outside /_emdash/ that plugins inject (e.g.,
 	// /.well-known/atproto-client-metadata.json) skip the entire runtime

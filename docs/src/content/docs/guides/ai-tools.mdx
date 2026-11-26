@@ -160,6 +160,30 @@ When an MCP client opens the OAuth consent page, every permission it requested i
 
 EmDash rejects a tool call when either the token scope or the user's role is insufficient. A client may explain that error, but EmDash remains the authority that enforces it.
 
+## Troubleshoot a connection
+
+### The client cannot start sign-in
+
+MCP clients find EmDash's OAuth server by requesting two URLs exactly as written:
+
+- `https://example.com/.well-known/oauth-protected-resource`
+- `https://example.com/.well-known/oauth-authorization-server/_emdash`
+
+Each must return `200` with a JSON body. If either one redirects, most clients stop before showing a sign-in page. Site middleware, CDN page rules, or host redirects that add or remove trailing slashes commonly cause this. Exclude `/.well-known/` paths from those redirects.
+
+Check both URLs with `curl -i` and confirm the response is `200` with no `Location` header.
+
+### Requests return an HTML challenge or 403
+
+If your site sits behind a CDN or firewall with bot protection, it can challenge requests from the client's servers. The client then receives an HTML page instead of JSON and reports a connection error. Exempt these paths from bot challenges:
+
+- `/_emdash/api/mcp`
+- `/_emdash/api/oauth/*`
+- `/.well-known/oauth-protected-resource`
+- `/.well-known/oauth-authorization-server/_emdash`
+
+An unauthenticated `POST` to `/_emdash/api/mcp` should return `401` with a `WWW-Authenticate: Bearer resource_metadata=...` header. That response means the client can reach EmDash.
+
 ## Tips
 
 - **Be specific about collections.** Say "create a blog post" rather than "create a post" if you have multiple collections.

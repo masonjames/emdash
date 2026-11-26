@@ -284,7 +284,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	if (bearerResult === "invalid") {
 		const response = apiError("INVALID_TOKEN", "Invalid or expired token", 401);
 		// Add WWW-Authenticate header on MCP endpoint 401s to trigger OAuth discovery
-		if (url.pathname === "/_emdash/api/mcp") {
+		if (stripTrailingSlash(url.pathname) === MCP_ENDPOINT_PATH) {
 			const origin = getPublicOrigin(url, context.locals.emdash?.config);
 			response.headers.set(
 				"WWW-Authenticate",
@@ -300,7 +300,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	// be consulted for this endpoint, and unauthenticated requests must return
 	// the OAuth discovery-style 401 response.
 	const method = context.request.method.toUpperCase();
-	const isMcpEndpoint = url.pathname === MCP_ENDPOINT_PATH;
+	const isMcpEndpoint = stripTrailingSlash(url.pathname) === MCP_ENDPOINT_PATH;
 	if (isMcpEndpoint && !isTokenAuth) {
 		return mcpUnauthorizedResponse(url, context.locals.emdash?.config);
 	}
@@ -889,7 +889,7 @@ function enforceTokenScope(
 	// MCP is authenticated here, but each tool enforces its own scope. A
 	// blanket content:read/admin requirement would prevent plugin-scoped tokens
 	// from reaching `mcp/server.ts`, where the actual tool policy lives.
-	if (pathname === MCP_ENDPOINT_PATH) return null;
+	if (stripTrailingSlash(pathname) === MCP_ENDPOINT_PATH) return null;
 
 	const isWrite = WRITE_METHODS.has(method);
 

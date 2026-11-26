@@ -135,6 +135,19 @@ describe("MCP discovery auth middleware", () => {
 		});
 	});
 
+	it("returns the discovery 401 for the slashed MCP path", async () => {
+		const { response, next } = await runAuthMiddleware({
+			pathname: "/_emdash/api/mcp/",
+			headers: { "Content-Type": "application/json" },
+		});
+
+		expect(next).not.toHaveBeenCalled();
+		expect(response.status).toBe(401);
+		expect(response.headers.get("WWW-Authenticate")).toBe(
+			'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"',
+		);
+	});
+
 	it("does not read the session for anonymous MCP POST discovery requests", async () => {
 		const { response, next, session } = await runAuthMiddleware({
 			pathname: "/_emdash/api/mcp",
