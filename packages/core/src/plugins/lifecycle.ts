@@ -4,13 +4,18 @@ import { handlePluginDisable, handlePluginEnable } from "../api/handlers/plugins
 import type { Database } from "../database/types.js";
 import type { SandboxedPluginEntry } from "../emdash-runtime.js";
 import { setCronTasksEnabled } from "./cron.js";
+import { PluginStateRepository } from "./state.js";
 import type { ResolvedPlugin } from "./types.js";
 
 export interface PluginLifecycleRuntime {
 	db: Kysely<Database>;
 	configuredPlugins: ResolvedPlugin[];
 	sandboxedPluginEntries: SandboxedPluginEntry[];
-	setPluginStatus(pluginId: string, status: "active" | "inactive"): Promise<void>;
+	setPluginStatus(
+		pluginId: string,
+		status: "active" | "inactive",
+		generation?: bigint,
+	): Promise<void>;
 	syncMarketplacePlugins(): Promise<void>;
 	syncRegistryPlugins(): Promise<void>;
 }
@@ -24,10 +29,34 @@ export async function enableRuntimePlugin(runtime: PluginLifecycleRuntime, plugi
 	);
 	if (!result.success) return result;
 
+	const generation = new PluginStateRepository(runtime.db).getLastWrittenGeneration();
 	const source = result.data.item.source;
 	if (source === "registry") await runtime.syncRegistryPlugins();
 	else if (source === "marketplace") await runtime.syncMarketplacePlugins();
-	await runtime.setPluginStatus(pluginId, "active");
+	try {
+		await runtime.setPluginStatus(pluginId, "active", generation);
+	} catch (error) {
+		console.error(`EmDash: Failed to activate plugin "${pluginId}":`, error);
+		try {
+			const stateRepo = new PluginStateRepository(runtime.db);
+			const state = await stateRepo.get(pluginId);
+			if (state) await stateRepo.disable(pluginId, state.version);
+		} catch (rollbackError) {
+			console.error(`EmDash: Failed to persist plugin "${pluginId}" as inactive:`, rollbackError);
+		}
+		try {
+			await setCronTasksEnabled(runtime.db, pluginId, false, { throwOnError: true });
+		} catch (rollbackError) {
+			console.error(
+				`EmDash: Failed to disable cron tasks for plugin "${pluginId}":`,
+				rollbackError,
+			);
+		}
+		return {
+			success: false as const,
+			error: { code: "PLUGIN_ENABLE_ERROR", message: "Failed to enable plugin" },
+		};
+	}
 	await setCronTasksEnabled(runtime.db, pluginId, true);
 	return result;
 }
@@ -41,7 +70,14 @@ export async function disableRuntimePlugin(runtime: PluginLifecycleRuntime, plug
 	);
 	if (!result.success) return result;
 
-	await runtime.setPluginStatus(pluginId, "inactive");
-	await setCronTasksEnabled(runtime.db, pluginId, false);
+	try {
+		await runtime.setPluginStatus(
+			pluginId,
+			"inactive",
+			new PluginStateRepository(runtime.db).getLastWrittenGeneration(),
+		);
+	} finally {
+		await setCronTasksEnabled(runtime.db, pluginId, false);
+	}
 	return result;
 }

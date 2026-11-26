@@ -5,18 +5,24 @@
  * POST /_emdash/api/content/:collection/:id/terms/:taxonomy - Set terms for an entry
  */
 
+import { hasPermission } from "@emdash-cms/auth";
 import type { APIRoute } from "astro";
+import { sql } from "kysely";
 
-import { requirePerm, requireOwnerPerm } from "#api/authorize.js";
-import { apiError, apiSuccess, handleError, requireDb } from "#api/error.js";
+import { requireAnyPerm, requireEntryEditPerm, requirePerm } from "#api/authorize.js";
+import { apiError, apiSuccess, handleError } from "#api/error.js";
 import { parseBody, isParseError } from "#api/parse.js";
 import { contentTermsBody } from "#api/schemas.js";
 import { taxonomyTag } from "#cache/chrome-tags.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
+import { isPostgres } from "#db/dialect-helpers.js";
 import { ContentRepository } from "#db/repositories/content.js";
 import {
 	TaxonomyRepository,
 	type TaxonomyAssignmentResolution,
 } from "#db/repositories/taxonomy.js";
+import { withTransaction } from "#db/transaction.js";
+import { validateIdentifier } from "#db/validate.js";
 import { invalidateTermCache } from "#taxonomies/index.js";
 import { chunks } from "#utils/chunks.js";
 
@@ -65,8 +71,9 @@ export const GET: APIRoute = async ({ params, locals }) => {
 	const { emdash, user } = locals;
 	const { collection, id, taxonomy } = params;
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 	const denied = requirePerm(user, "content:read");
 	if (denied) return denied;
 
@@ -79,7 +86,9 @@ export const GET: APIRoute = async ({ params, locals }) => {
 		// entry's locale server-side so the response includes only that locale's
 		// term variant.
 		const entry = await new ContentRepository(emdash.db).findByIdOrSlug(collection, id);
-		if (!entry) return apiError("NOT_FOUND", "Content not found", 404);
+		if (!entry || (entry.status !== "published" && !hasPermission(user, "content:read_drafts"))) {
+			return apiError("NOT_FOUND", "Content not found", 404);
+		}
 		const locale = entry.locale || getI18nConfig()?.defaultLocale || "en";
 		const defaultLocale = getI18nConfig()?.defaultLocale ?? "en";
 
@@ -109,9 +118,10 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 		return apiError("VALIDATION_ERROR", "Collection, id, and taxonomy required", 400);
 	}
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
-	const denied = requirePerm(user, "content:edit_own");
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
+	const denied = requireAnyPerm(user, ["content:edit_own", "content:edit_own_drafts"]);
 	if (denied) return denied;
 
 	if (!emdash.handleContentGet) {
@@ -129,24 +139,14 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 	}
 
 	// Check ownership for edit permission
-	const existingData =
-		existing.data && typeof existing.data === "object"
-			? // eslint-disable-next-line typescript/no-unsafe-type-assertion -- handler returns unknown data; narrowed by typeof check above
-				(existing.data as Record<string, unknown>)
-			: undefined;
-	// Handler returns { item, _rev } — extract the item for ownership check
-	const existingItem =
-		existingData?.item && typeof existingData.item === "object"
-			? // eslint-disable-next-line typescript/no-unsafe-type-assertion -- narrowed by typeof check above
-				(existingData.item as Record<string, unknown>)
-			: existingData;
-	const authorId = typeof existingItem?.authorId === "string" ? existingItem.authorId : "";
-	const editDenied = requireOwnerPerm(user, authorId, "content:edit_own", "content:edit_any");
+	const existingItem = existing.data.item;
+	const authorId = existingItem.authorId ?? "";
+	const editDenied = requireEntryEditPerm(user, { authorId, status: existingItem.status });
 	if (editDenied) return editDenied;
 
 	// Resolve the canonical content ID from the handler result.
 	// The URL `id` param may be a slug; we must use the real ID for term storage.
-	const canonicalId = typeof existingItem?.id === "string" ? existingItem.id : id;
+	const canonicalId = existingItem.id;
 	// The assignment spans the content translation group, while the response
 	// includes only the term variant matching this entry's locale.
 	const entryLocale =
@@ -157,7 +157,7 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 	try {
 		const body = await parseBody(request, contentTermsBody);
 		if (isParseError(body)) return body;
-		const { termIds } = body;
+		const { termIds, expected } = body;
 
 		const repo = new TaxonomyRepository(emdash.db);
 
@@ -177,7 +177,55 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 		}
 
 		// Set the terms (replaces existing) using the canonical ID
-		await repo.setTermsForEntry(collection, canonicalId, taxonomy, termIds);
+		const written = await withTransaction(emdash.db, async (trx) => {
+			if (expected) {
+				// Postgres reads without a lock, so two changes could both find the terms they
+				// were based on. Every translation shares the terms, so each one's row is locked,
+				// in id order so that two changes can't deadlock.
+				if (isPostgres(trx)) {
+					validateIdentifier(collection, "collection slug");
+					const table = sql.ref(`ec_${collection}`);
+					await sql`SELECT id FROM ${table} WHERE id = ${canonicalId} OR translation_group = (SELECT translation_group FROM ${table} WHERE id = ${canonicalId}) ORDER BY id FOR UPDATE`.execute(
+						trx,
+					);
+				}
+				const current = await new TaxonomyRepository(trx).getTermAssignmentsForEntry(
+					collection,
+					canonicalId,
+					taxonomy,
+					entryLocale,
+					getI18nConfig()?.defaultLocale ?? "en",
+				);
+				// The admin lists an assignment with no term in the entry's locale by its first translation.
+				const stored = current
+					.flatMap(({ term, translations }) => {
+						const termId = term?.id ?? translations[0]?.id;
+						return termId ? [termId] : [];
+					})
+					.toSorted();
+				const wanted = [...expected].toSorted();
+				if (stored.length !== wanted.length || stored.some((termId, i) => termId !== wanted[i])) {
+					return false;
+				}
+			}
+			// D1 runs these statements without a transaction, so another change can land after the
+			// check. Writing only this change, rather than the whole list, keeps that one too.
+			await new TaxonomyRepository(trx).setTermsForEntry(
+				collection,
+				canonicalId,
+				taxonomy,
+				termIds,
+				expected,
+			);
+			return true;
+		});
+		if (!written) {
+			return apiError(
+				"LIST_CONFLICT",
+				"The entry's terms changed. Read them again and apply the change to them.",
+				409,
+			);
+		}
 
 		// Term assignments changed — invalidate the hasAnyTermAssignments cache
 		// so hydration on subsequent reads issues a fresh query.
@@ -190,7 +238,7 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 					: [];
 			const tags = [collection, ...new Set([canonicalId, ...siblingIds]), taxonomyTag(taxonomy)];
 			for (const tagBatch of chunks(tags, MAX_CACHE_PURGE_TAGS)) {
-				await cache.invalidate({ tags: tagBatch });
+				await invalidateRouteCache(cache, tagBatch);
 			}
 		}
 

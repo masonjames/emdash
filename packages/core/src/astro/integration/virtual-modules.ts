@@ -6,9 +6,10 @@
  * so Vite can properly resolve and bundle them.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import type { AuthProviderDescriptor } from "../../auth/types.js";
 import type { MediaProviderDescriptor } from "../../media/types.js";
@@ -74,6 +75,12 @@ export const RESOLVED_VIRTUAL_ENV_ID = "\0" + VIRTUAL_ENV_ID;
 
 export const VIRTUAL_BUILD_ID = "virtual:emdash/build";
 export const RESOLVED_VIRTUAL_BUILD_ID = "\0" + VIRTUAL_BUILD_ID;
+
+export const VIRTUAL_ROOMS_ID = "virtual:emdash/rooms";
+export const RESOLVED_VIRTUAL_ROOMS_ID = "\0" + VIRTUAL_ROOMS_ID;
+
+export const VIRTUAL_ROOM_ENGINE_ID = "virtual:emdash/room-engine";
+export const RESOLVED_VIRTUAL_ROOM_ENGINE_ID = "\0" + VIRTUAL_ROOM_ENGINE_ID;
 
 /**
  * Generates the config virtual module.
@@ -250,10 +257,6 @@ ${entries.join("\n")}
  * between build time and runtime.
  */
 export function generatePluginsModule(descriptors: PluginDescriptor[]): string {
-	if (descriptors.length === 0) {
-		return `export const plugins = [];`;
-	}
-
 	const imports: string[] = [];
 	const instantiations: string[] = [];
 
@@ -284,6 +287,8 @@ export function generatePluginsModule(descriptors: PluginDescriptor[]): string {
 			instantiations.push(
 				`adaptSandboxEntry(${varName}, ${JSON.stringify({
 					id: descriptor.id,
+					displayName: descriptor.displayName,
+					description: descriptor.description,
 					version: descriptor.version,
 					capabilities: descriptor.capabilities,
 					allowedHosts: descriptor.allowedHosts,
@@ -302,7 +307,12 @@ export function generatePluginsModule(descriptors: PluginDescriptor[]): string {
 			// Native format: import createPlugin and call with options
 			const varName = `createPlugin${index}`;
 			imports.push(`import { createPlugin as ${varName} } from "${descriptor.entrypoint}";`);
-			instantiations.push(`${varName}(${JSON.stringify(descriptor.options ?? {})})`);
+			instantiations.push(
+				`({ ...${varName}(${JSON.stringify(descriptor.options ?? {})}), ...${JSON.stringify({
+					displayName: descriptor.displayName,
+					description: descriptor.description,
+				})} })`,
+			);
 		}
 	});
 
@@ -310,16 +320,23 @@ export function generatePluginsModule(descriptors: PluginDescriptor[]): string {
 		? `import { adaptSandboxEntry } from "emdash/internal/plugins/adapt-sandbox-entry";\n`
 		: "";
 
+	// Share instances across duplicated SSR chunks, but not across plugin configurations.
+	const cacheId = createHash("sha256")
+		.update(adapterImport + imports.join("\n") + instantiations.join(",\n"))
+		.digest("hex");
+
 	return `
 // Auto-generated plugins module
-// Imports and instantiates all configured plugins at runtime
-
 ${adapterImport}${imports.join("\n")}
 
-/** Resolved plugins array */
-export const plugins = [
-  ${instantiations.join(",\n  ")}
-];
+// Defer factories and adaptation until the runtime's module graph has initialized.
+export function plugins() {
+  const key = Symbol.for("emdash:plugins");
+  const cache = globalThis[key] ??= {};
+  return cache["${cacheId}"] ??= [
+    ${instantiations.join(",\n    ")}
+  ];
+}
 `;
 }
 
@@ -478,12 +495,9 @@ export function generateBlockComponentsModule(descriptors: PluginDescriptor[]): 
  *
  * Under @astrojs/cloudflare, re-exports `waitUntil` from `cloudflare:workers`
  * so `after(fn)` in core can extend the worker's lifetime past the response
- * for deferred bookkeeping. For any other adapter, exports `undefined` —
- * Node's long-lived event loop keeps deferred promises running without a
- * lifetime extender.
- *
- * Keeping the adapter check here — rather than in core — means core itself
- * has no Cloudflare-specific imports or code paths.
+ * for deferred bookkeeping. For any other adapter, exports `undefined` so
+ * core can probe for workerd at runtime. Node's long-lived event loop keeps
+ * deferred promises running without a lifetime extender.
  */
 export function generateWaitUntilModule(adapterName: string | undefined): string {
 	if (adapterName === "@astrojs/cloudflare") {
@@ -499,10 +513,11 @@ export function generateWaitUntilModule(adapterName: string | undefined): string
  * routes can read Worker bindings/secrets without touching
  * `Astro.locals.runtime.env`, which Astro 6+ removed (accessing it throws
  * rather than returning undefined, so `locals.runtime?.env` optional-chaining
- * doesn't help -- see #1736). For any other adapter, exports `undefined` so
- * callers fall back to `import.meta.env`. Mirrors generateWaitUntilModule:
- * core stays adapter-agnostic, with no direct `cloudflare:workers` import
- * that would fail to resolve under a Node build.
+ * doesn't help). For any other adapter, exports `undefined`. Callers that
+ * need runtime secrets then prefer `process.env` over `import.meta.env`,
+ * which Vite replaces with the environment present at build time. Mirrors
+ * generateWaitUntilModule: core stays adapter-agnostic, with no direct
+ * `cloudflare:workers` import that would fail to resolve under a Node build.
  */
 export function generateEnvModule(adapterName: string | undefined): string {
 	if (adapterName === "@astrojs/cloudflare") {
@@ -528,36 +543,63 @@ export function generateBuildModule(buildTime: number): string {
  * Generates the scheduler virtual module.
  *
  * Decides — at build time, from the Astro adapter — whether the runtime gets a
- * long-lived timer heartbeat. A *production* Cloudflare build has no persistent
- * timers, so the Worker's `scheduled()` handler (a Cron Trigger) drives
- * `runScheduledTasks()` instead and this exports `null`. Every other case — any
- * other adapter (Node, Bun), and crucially local `astro dev` even under the
- * Cloudflare adapter (no Cron Trigger fires in dev) — gets a `NodeCronScheduler`
- * factory so plugin cron, scheduled publishing, and cleanup still run.
+ * long-lived timer heartbeat. Cloudflare Workers have no persistent timers, so
+ * the Worker's `scheduled()` handler drives `runScheduledTasks()` instead. In
+ * local dev the long-lived Vite host invokes an EmDash-owned route that runs
+ * the same maintenance inside workerd. Other adapters (Node, Bun) get a
+ * `NodeCronScheduler` factory.
  *
  * Keeping the adapter check here — rather than in core's runtime — means the
  * runtime has no Cloudflare-specific code path; it just calls `createScheduler`
  * if one was injected. Mirrors the wait-until module's approach.
  */
-export function generateSchedulerModule(
-	adapterName: string | undefined,
-	command: "build" | "serve" | undefined,
-): string {
-	// Only suppress the timer for an actual Cloudflare *build* — that artifact
-	// runs in workerd where a Cron Trigger drives scheduled work. In `serve`
-	// (local dev) nothing fires the Cron Trigger, so fall through to the timer.
-	if (adapterName === "@astrojs/cloudflare" && command !== "serve") {
-		return `// Serverless build: an external Cron Trigger drives scheduled work.
+export function generateSchedulerModule(adapterName: string | undefined): string {
+	if (adapterName === "@astrojs/cloudflare") {
+		return `// Cloudflare: an external platform event drives scheduled work.
 export const createScheduler = null;
 `;
 	}
-	return `// Long-lived runtime (or local dev): drive scheduled work from an in-process timer.
+	return `// Long-lived runtime: drive scheduled work from an in-process timer.
 import { NodeCronScheduler } from "emdash";
 
 export function createScheduler(executor) {
 	return new NodeCronScheduler(executor);
 }
 `;
+}
+
+/**
+ * Generates the rooms virtual module: with co-editing on, the in-process room
+ * host on `@astrojs/node` and the Durable Object host on `@astrojs/cloudflare`,
+ * and `null` otherwise, which gives every join single-editor mode. Only this
+ * module imports either host, so the Node.js host's code never reaches a
+ * Workers bundle.
+ *
+ * `@emdash-cms/cloudflare` isn't a dependency of `emdash`, so a Cloudflare site
+ * without it gets no room host rather than a failed build.
+ */
+export function generateRoomsModule(
+	adapterName: string | undefined,
+	coEditing: boolean,
+	cloudflareRoomsResolves: boolean,
+): string {
+	if (coEditing && adapterName === "@astrojs/node") {
+		return `export { createRoomHost } from "emdash/internal/co-editing/node";\n`;
+	}
+	if (coEditing && adapterName === "@astrojs/cloudflare" && cloudflareRoomsResolves) {
+		return `export { createRoomHost } from "@emdash-cms/cloudflare/internal/rooms";\n`;
+	}
+	return `export const createRoomHost = null;\n`;
+}
+
+/**
+ * Generates the module `EmDashRoom` imports the room engine through. With co-editing off it
+ * exports null, so the engine stays out of a Cloudflare site's upload.
+ */
+export function generateRoomEngineModule(coEditing: boolean): string {
+	return coEditing
+		? `export const loadRoomEngine = () => import("emdash/internal/co-editing/room");\n`
+		: `export const loadRoomEngine = null;\n`;
 }
 
 /**
@@ -580,6 +622,7 @@ export function createScheduler(executor) {
  */
 export function generateSeedModule(projectRoot: string, warnOnFallback = false): string {
 	let userSeedJson: string | null = null;
+	let mediaBasePath: string | undefined;
 
 	// Try .emdash/seed.json
 	try {
@@ -587,6 +630,7 @@ export function generateSeedModule(projectRoot: string, warnOnFallback = false):
 		const content = readFileSync(seedPath, "utf-8");
 		JSON.parse(content); // validate
 		userSeedJson = content;
+		mediaBasePath = dirname(seedPath);
 	} catch {
 		// Not found, try next
 	}
@@ -603,6 +647,7 @@ export function generateSeedModule(projectRoot: string, warnOnFallback = false):
 				const content = readFileSync(seedPath, "utf-8");
 				JSON.parse(content); // validate
 				userSeedJson = content;
+				mediaBasePath = dirname(seedPath);
 			}
 		} catch {
 			// Not found
@@ -616,13 +661,18 @@ export function generateSeedModule(projectRoot: string, warnOnFallback = false):
 			const content = readFileSync(seedPath, "utf-8");
 			JSON.parse(content); // validate
 			userSeedJson = content;
+			mediaBasePath = dirname(seedPath);
 		} catch {
 			// Not found
 		}
 	}
 
 	if (userSeedJson) {
-		return [`export const userSeed = ${userSeedJson};`, `export const seed = userSeed;`].join("\n");
+		return [
+			`export const userSeed = ${userSeedJson};`,
+			`export const seed = userSeed;`,
+			`export const mediaBasePath = ${JSON.stringify(mediaBasePath)};`,
+		].join("\n");
 	}
 
 	// No user seed — inline the default. Caller (the Vite plugin) gates this
@@ -636,6 +686,7 @@ export function generateSeedModule(projectRoot: string, warnOnFallback = false):
 	return [
 		`export const userSeed = null;`,
 		`export const seed = ${JSON.stringify(defaultSeed)};`,
+		`export const mediaBasePath = undefined;`,
 	].join("\n");
 }
 
@@ -694,6 +745,8 @@ export const sandboxedPlugins = [];
 		// Create the plugin entry with embedded code and sandbox config
 		pluginEntries.push(`{
     id: ${JSON.stringify(descriptor.id)},
+		displayName: ${JSON.stringify(descriptor.displayName)},
+		description: ${JSON.stringify(descriptor.description)},
     version: ${JSON.stringify(descriptor.version)},
     options: ${JSON.stringify(descriptor.options ?? {})},
     capabilities: ${JSON.stringify(descriptor.capabilities ?? [])},

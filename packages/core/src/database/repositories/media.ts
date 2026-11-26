@@ -9,7 +9,10 @@ import { ulid } from "ulidx";
 
 import { normalizeFocalPoint, type FocalPointUpdate } from "../../media/focal-point.js";
 import { chunks, SQL_BATCH_SIZE } from "../../utils/chunks.js";
+import { textPosition } from "../dialect-helpers.js";
+import { jsonTextValues } from "../json-recordset.js";
 import type { Database, MediaRow } from "../types.js";
+import { chunkJsonRows } from "./media-usage.js";
 import type { FindManyResult } from "./types.js";
 import { encodeCursor, decodeCursor } from "./types.js";
 
@@ -98,7 +101,7 @@ export interface FindManyMediaOptions {
 	/** Filter by MIME type. Pass a string for a single prefix/exact, or an array to match any. Strings ending with "/" are treated as LIKE prefix matches; others are exact equality. */
 	mimeType?: string | readonly string[];
 	status?: MediaStatus | "all"; // Filter by status, defaults to "ready"
-	/** Case-insensitive substring matched against the filename (covers filename and extension). */
+	/** Case-insensitive substring matched against filename, storage key, or ID. Media URLs search by their last path segment. */
 	q?: string;
 	/** Omit for all media, pass null for the Main library, or pass a folder ID. */
 	folderId?: string | null;
@@ -422,6 +425,44 @@ export class MediaRepository {
 	}
 
 	/**
+	 * Map each storage key to the id of its media item, in one query per JSON
+	 * bind's worth of keys. Unknown keys are left out.
+	 */
+	async findIdsByStorageKeys(storageKeys: readonly string[]): Promise<Map<string, string>> {
+		const ids = new Map<string, string>();
+		for (const batch of chunkJsonRows(storageKeys)) {
+			const result = await sql<{ id: string; storage_key: string }>`
+				WITH requested AS (${jsonTextValues(this.db, batch)})
+				SELECT media.id, media.storage_key
+				FROM media
+				INNER JOIN requested ON requested.value = media.storage_key
+				ORDER BY media.id
+			`.execute(this.db);
+			for (const row of result.rows) {
+				if (!ids.has(row.storage_key)) ids.set(row.storage_key, row.id);
+			}
+		}
+		return ids;
+	}
+
+	/**
+	 * Find the original upload filename for a storage key.
+	 *
+	 * Used by the public media file route to name the download after the file
+	 * the editor uploaded rather than after its storage key. Selects the single
+	 * column it needs: this runs on every unauthenticated download.
+	 */
+	async findFilenameByStorageKey(storageKey: string): Promise<string | null> {
+		const row = await this.db
+			.selectFrom("media")
+			.select("filename")
+			.where("storage_key", "=", storageKey)
+			.executeTakeFirst();
+
+		return row?.filename ?? null;
+	}
+
+	/**
 	 * Find media by filename
 	 * Useful for idempotent imports
 	 */
@@ -666,13 +707,21 @@ export class MediaRepository {
 			query = query.where((eb) => mimeMatchExpr(eb, mimeFilters));
 		}
 
-		const term = options.q?.trim();
+		let term = options.q?.trim() ?? "";
+		if (term.includes("/")) {
+			const queryIndex = term.indexOf("?");
+			if (queryIndex !== -1) term = term.slice(0, queryIndex);
+			const fragmentIndex = term.indexOf("#");
+			if (fragmentIndex !== -1) term = term.slice(0, fragmentIndex);
+			term = term.slice(term.lastIndexOf("/") + 1).trim();
+		}
 		if (term) {
-			const pattern = `%${escapeLike(term)}%`;
-			query = query.where(
-				sql<string>`lower(filename)`,
-				"like",
-				sql<string>`lower(${pattern}) escape '\\'`,
+			query = query.where((eb) =>
+				eb.or(
+					(["filename", "storage_key", "id"] as const).map((column) =>
+						eb(textPosition(this.db, sql`lower(${sql.ref(column)})`, sql`lower(${term})`), ">", 0),
+					),
+				),
 			);
 		}
 

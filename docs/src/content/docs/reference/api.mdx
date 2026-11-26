@@ -7,15 +7,17 @@ import { Aside } from "@astrojs/starlight/components";
 
 This page covers the public API used by Astro pages, layouts, and components to read and present an EmDash site. It does not inventory every export from the `emdash` package root: database repositories, API handlers, migration utilities, plugin-authoring APIs, and other server internals have separate references or are intended for framework integration code.
 
-The **site-template API contract** in this reference lists every function imported from `emdash` by EmDash's maintained site templates. Type-only imports such as `MediaValue` belong to the relevant data-model documentation. Related functions are documented in the same sections when they help a site author, but the page does not cover unrelated root exports.
+The **site-template API contract** in this reference lists every runtime export imported from `emdash` by EmDash's maintained site templates. Type-only imports such as `MediaValue` belong to the relevant data-model documentation. Related functions are documented in the same sections when they help a site author, but the page does not cover unrelated root exports.
 
 ## Site-template API contract
 
-The maintained templates call these runtime helpers:
+The maintained templates use these runtime exports:
 
-| Function | Used for |
-| -------- | -------- |
+| Export | Used for |
+| ------ | -------- |
 | `decodeSlug` | Decoding a dynamic route parameter before lookup |
+| `getContentSeo` | Reading an entry's SEO panel values without template fallbacks |
+| `getEditMeta` | Detecting an empty field that still renders its inline editor in edit mode |
 | `getEmDashCollection` | Reading and filtering entries in a collection |
 | `getEmDashEntry` | Reading one entry by ID or slug |
 | `getMenuWithCacheHint` | Rendering a navigation menu with cache invalidation |
@@ -26,6 +28,7 @@ The maintained templates call these runtime helpers:
 | `getTermsForEntries` | Batch-loading one taxonomy for a list of entries |
 | `sanitizeHref` | Rejecting unsafe URL schemes before rendering stored links |
 | `search` | Searching published content across collections |
+| `SearchUnavailableError` | Showing a search-unavailable message when SQLite lacks FTS5 |
 
 ## Content queries
 
@@ -85,7 +88,7 @@ The function resolves to a `CollectionResult`:
 interface CollectionResult<T> {
 	entries: ContentEntry<T>[]; // Empty array if error or none found
 	error?: Error; // Set if query failed
-	cacheHint: CacheHint; // Tags and last-modified time for Astro route caching
+	cacheHint: CacheHint; // Purge tags for Astro route caching
 	nextCursor?: string; // Cursor for the next keyset page, if any
 	hasMore?: boolean; // Whether more entries exist beyond this page (when `limit` is set)
 }
@@ -166,7 +169,7 @@ interface EntryResult<T, R> {
 	error?: Error; // Set only for actual errors, not "not found"
 	isPreview: boolean; // true if draft content is being served
 	fallbackLocale?: string; // Set when locale fallback returned another locale
-	cacheHint: CacheHint; // Tags and last-modified time for Astro route caching
+	cacheHint: CacheHint; // Purge tags for Astro route caching
 }
 ```
 
@@ -554,7 +557,7 @@ The `Comments` and `CommentForm` components from `emdash/ui/comments` render Eng
 
 `CommentForm` accepts `name`, `email`, `comment`, `submit`, `submitting`, `published`, `pending`, `error`, and `networkError`. The form shows `published` when the comment is approved immediately and `pending` when it waits for moderation. Without `error`, the form shows the server's English error message.
 
-`Comments` formats comment dates in the page locale (`Astro.currentLocale`) and falls back to `en-US`. Astro sets `Astro.currentLocale` only when the [`i18n` configuration](https://docs.astro.build/en/guides/internationalization/) is enabled. Without it, or to use a different format, pass a BCP 47 locale tag such as `locale="de-CH"`.
+`Comments` formats comment dates in the page locale (`Astro.currentLocale`) and falls back to `en-US`. Dates use the site's **Settings → General → Timezone**, falling back to UTC when the setting is missing or invalid. Astro sets `Astro.currentLocale` only when the [`i18n` configuration](https://docs.astro.build/en/guides/internationalization/) is enabled. Without it, or to use a different format, pass a BCP 47 locale tag such as `locale="de-CH"`.
 
 ## Menus
 
@@ -707,6 +710,8 @@ const cta = await getSection("newsletter-cta");
 
 ## Search
 
+SQLite search requires FTS5. A non-empty search throws `SearchUnavailableError` (exported from `emdash`, with code `SEARCH_UNAVAILABLE`) when the SQLite build lacks FTS5, even if no collections have search enabled. A server-rendered page that does not catch this error returns an error response; catch it at the page boundary to show a search-unavailable message. See the [Node.js deployment prerequisites](/deployment/nodejs/#prerequisites) for a capability check and recovery steps.
+
 Run a global search across collections. Results include highlighted snippets:
 
 ```ts
@@ -753,6 +758,12 @@ if (results.nextCursor) {
 	});
 }
 ```
+
+`search()` ranks full-title phrase matches first, then titles matching every term in a plain-term query, then other matches. Title tiers require the result title field to be indexed as searchable. Title matching uses the collection's search tokenizer, including its case folding and prefix matching. Advanced FTS operators still control which entries match, but title tiers do not interpret their full operator semantics. Within the title-term tier, shorter titles rank first, with `score` breaking equal-length ties. Other tiers rank by `score`.
+
+Scores are normalized to 0–1 per collection, with each collection's strongest match scoring 1 (or 0 if every match has zero weight). This also applies when `collections` contains only one collection. A higher score does not override a stronger title-match tier or a shorter title-term match, so preserve the returned order rather than sorting by `score` alone.
+
+`searchCollection()` keeps raw BM25 score magnitudes and score-based ordering. Scores from the two APIs are not interchangeable.
 
 With `scope: "title"` the query matches only each collection's title field instead of the full indexed text -- useful for pickers and autocomplete where body-text matches would surprise. Collections whose title field is not indexed for search return no results under this scope.
 

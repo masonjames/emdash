@@ -1,5 +1,39 @@
 # @emdash-cms/auth
 
+## 1.6.0
+
+### Patch Changes
+
+- [#4935](https://github.com/emdash-cms/emdash/pull/4935) [`6d0551b`](https://github.com/emdash-cms/emdash/commit/6d0551bdec7f776d3f77233f095342f3aefeb1ac) Thanks [@ascorbic](https://github.com/ascorbic)! - Updates `createKyselyAdapter()` to also accept a database whose columns with database defaults, such as `users.disabled` and `created_at`, are typed as `Generated`. EmDash's own database instance can now be passed without a type cast. The new `GeneratedAuthTables` type describes that shape, and schemas that match `AuthTables` keep working.
+
+- [#4805](https://github.com/emdash-cms/emdash/pull/4805) [`395d56c`](https://github.com/emdash-cms/emdash/commit/395d56c275bdbc27b84c650cd4cfda4b38ef9f83) Thanks [@emdash-autofix](https://github.com/apps/emdash-autofix)! - Fixes the Users page showing “Last Login: Never” after magic-link, OAuth (including AT Protocol), or external-provider sign-in. Successful sign-ins now record a login time independently of passkeys, while existing passkey login history remains visible. Previously unrecorded logins appear after the next sign-in; refreshing an existing session does not record a new login.
+  
+  EmDash migrates the database automatically. Existing standalone Kysely auth-adapter databases continue to report passkey history without requiring a schema change.
+
+## 1.5.0
+
+### Patch Changes
+
+- [#4483](https://github.com/emdash-cms/emdash/pull/4483) [`7d48e95`](https://github.com/emdash-cms/emdash/commit/7d48e95c8b3b0d5f53a48ebbe5ee9f005035c610) Thanks [@emdash-autofix](https://github.com/apps/emdash-autofix)! - Updates the Zod dependency from 4.5.4 to 4.6.7 to address the reported high-severity `npm audit` warning for the older version. Upgrade EmDash and any separately installed plugin tooling to receive the updated dependency; refreshing a lockfile alone cannot replace the previous exact pin.
+  
+  Oversized repeater arrays now report the array-length error without validating their rows. Arrays within the configured limit still report individual row errors.
+
+## 1.4.0
+
+No changes in this release.
+
+## 1.3.1
+
+No changes in this release.
+
+## 1.3.0
+
+### Patch Changes
+
+- [#4133](https://github.com/emdash-cms/emdash/pull/4133) [`ae6c1a4`](https://github.com/emdash-cms/emdash/commit/ae6c1a40a911e3dd3cbb65ab1de9596d9685a6ae) Thanks [@ascorbic](https://github.com/ascorbic)! - Fixes Contributors being unable to save changes to their own drafts. A Contributor could create an entry, but the next save, the entry lock, and setting categories or tags returned 403. Contributors can now edit their own entries while they are drafts, in the admin, the REST API, and the MCP `content_update` tool. They still cannot edit entries once they are published or scheduled, or publish them.
+  
+  The new `content:edit_own_drafts` permission grants this and is held by Contributor and every higher role. No other role's permissions change.
+
 ## 1.2.0
 
 ### Minor Changes

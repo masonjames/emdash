@@ -52,7 +52,7 @@ The result contains:
 
 - `entries`, which is an empty array when there are no matches or the query failed;
 - `error`, which is set for a failed query but not for an empty result;
-- `cacheHint`, which carries the tags and last-modified time for Astro's cache;
+- `cacheHint`, which carries the purge tags for Astro's cache;
 - `nextCursor`, which is set when a limited cursor page has more entries; and
 - `hasMore`, which reports whether a limited cursor or offset page has another page.
 
@@ -103,7 +103,7 @@ const { entries: frenchPosts } = await getEmDashCollection("posts", {
 ```
 
 If `locale` is omitted, EmDash uses the request locale and then the configured default locale. See
-[Internationalization](/guides/internationalization/#querying-translated-content) for fallback rules
+[Internationalization](/guides/internationalization/#query-translated-content) for fallback rules
 and translated routes.
 
 `status` accepts `"published"`, `"draft"`, or `"archived"`. Do not request drafts from a public
@@ -230,8 +230,8 @@ if (error) {
   return new Response("Unable to load post", { status: 500 });
 }
 
-if (!post) return Astro.rewrite("/404");
 if (Astro.cache?.enabled) Astro.cache.set(cacheHint);
+if (!post) return Astro.rewrite("/404");
 ---
 
 {isPreview && <p>This is an unpublished preview.</p>}
@@ -402,7 +402,8 @@ request. If you deliberately prerender a route, its HTML contains the content av
 time and changes only after another build.
 
 When Astro's cache is enabled, pass the query's `cacheHint` to `Astro.cache.set()`. EmDash associates
-the response with the collection and entry tags so publishing can invalidate affected cached pages.
+the response with the tags in the hint so publishing can invalidate affected cached pages.
+See [Route caching](/deployment/route-caching/) for which tags belong on index and detail pages.
 Avoid replacing that integration with a long fixed `Cache-Control` lifetime unless delayed updates
 are an explicit product decision.
 

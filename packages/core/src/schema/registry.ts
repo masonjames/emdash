@@ -10,6 +10,7 @@ import { sql } from "kysely";
 import { ulid } from "ulidx";
 
 import { refreshDevTypes } from "../astro/dev-typegen.js";
+import { deleteSharedCollectionRecords } from "../database/collection-cleanup.js";
 import {
 	columnExists,
 	currentTimestamp,
@@ -38,6 +39,7 @@ import {
 	markContentMediaUsageCollectionStaleSafely,
 } from "../media/usage/content-refresh.js";
 import { finishMediaUsageCollectionDeletion } from "../media/usage/maintenance-engine.js";
+import { invalidateCollectionCache } from "../object-cache/index.js";
 import { FTSManager } from "../search/fts-manager.js";
 import { getPortableTableSpec } from "../transfer/format/columns.js";
 import { canonicalDigest } from "../transfer/format/digest.js";
@@ -93,6 +95,8 @@ const COLUMN_TYPE_TO_DATA_TYPE = {
 } satisfies Record<ColumnType, ColumnDataType>;
 const TEXT_ALIAS_FIELD_TYPES: ReadonlySet<FieldType> = new Set(["string", "text", "slug"]);
 
+const SYSTEM_DATE_FIELDS: ReadonlySet<string> = new Set(["publishedAt", "createdAt", "updatedAt"]);
+
 /** Field types usable as a `titleField` — plain text that reads well as a title. */
 const TITLE_FIELD_TYPES: ReadonlySet<string> = new Set(["string", "text", "slug"]);
 
@@ -136,6 +140,7 @@ const VALID_COLLECTION_SUPPORTS: ReadonlySet<string> = new Set<CollectionSupport
 	"revisions",
 	"preview",
 	"scheduling",
+	"no-scheduling",
 	"search",
 	"seo",
 ]);
@@ -457,7 +462,8 @@ export class SchemaRegistry {
 
 	/**
 	 * Validate `titleField`/`dateField` against the collection's fields:
-	 * `titleField` must be a text-like field; `dateField` must be a `datetime` field.
+	 * `titleField` must be a text-like field; `dateField` must be a `datetime`
+	 * field or a system timestamp (`publishedAt`, `createdAt`, or `updatedAt`).
 	 * Only truthy values are checked (undefined = unchanged, null/"" = cleared).
 	 */
 	private async validateTitleDateFields(
@@ -466,7 +472,9 @@ export class SchemaRegistry {
 		input: { titleField?: string | null; dateField?: string | null },
 		db: Kysely<Database> = this.db,
 	): Promise<void> {
-		const slugs = [input.titleField, input.dateField].filter((slug): slug is string => !!slug);
+		const customDateField =
+			input.dateField && !SYSTEM_DATE_FIELDS.has(input.dateField) ? input.dateField : undefined;
+		const slugs = [input.titleField, customDateField].filter((slug): slug is string => !!slug);
 		if (slugs.length === 0) return;
 
 		const rows = await db
@@ -493,7 +501,7 @@ export class SchemaRegistry {
 			}
 		}
 
-		if (input.dateField) {
+		if (input.dateField && !SYSTEM_DATE_FIELDS.has(input.dateField)) {
 			const type = typeBySlug.get(input.dateField);
 			if (type === undefined) {
 				throw new SchemaError(
@@ -1075,6 +1083,7 @@ export class SchemaRegistry {
 	 * Update a collection
 	 */
 	async updateCollection(slug: string, input: UpdateCollectionInput): Promise<Collection> {
+		let titleFieldChanged = false;
 		const updated = await withTransaction(this.db, async (trx) => {
 			const existingRow = await trx
 				.selectFrom("_emdash_collections")
@@ -1145,6 +1154,7 @@ export class SchemaRegistry {
 			if (!row) {
 				throw new SchemaError("Failed to update collection", "UPDATE_FAILED");
 			}
+			titleFieldChanged = row.title_field !== existingRow.title_field;
 
 			// Sync FTS state when the supports array changes (e.g. search toggled on/off)
 			if (input.supports !== undefined) {
@@ -1157,6 +1167,8 @@ export class SchemaRegistry {
 
 			return this.mapCollectionRow(row);
 		});
+		// Cached entries carry the collection's titleField, which getSeoMeta() reads.
+		if (titleFieldChanged) invalidateCollectionCache(slug);
 		this.notifyTypegen();
 		return updated;
 	}
@@ -1211,10 +1223,17 @@ export class SchemaRegistry {
 				const ftsManager = new FTSManager(trx);
 				await ftsManager.dropFtsTable(slug);
 
-				// Drop the content table
+				// Drop the content table first: ec_* rows hold foreign keys to
+				// revisions.id, so the content table must go before revisions can
+				// be removed.
 				const tableName = this.getTableName(slug);
 				await sql`DROP TABLE IF EXISTS ${sql.ref(tableName)}`.execute(trx);
 				contentTableDropped = true;
+
+				// Remove shared-table records that are keyed by collection slug.
+				// Dropping the content table or deleting the collection row does not
+				// cascade to these, so they have to be cleared explicitly.
+				await deleteSharedCollectionRecords(trx, slug);
 
 				// Delete the collection record (fields will cascade)
 				await trx.deleteFrom("_emdash_collections").where("id", "=", existing.id).execute();
@@ -1316,6 +1335,7 @@ export class SchemaRegistry {
 		);
 
 		let schemaMutated = false;
+		let fieldStorageReady = false;
 		try {
 			const created = await withTransaction(this.db, async (trx) => {
 				// Insert field record
@@ -1359,6 +1379,8 @@ export class SchemaRegistry {
 					);
 				}
 
+				fieldStorageReady = true;
+
 				if (input.indexed) {
 					await this.createFieldIndex(collectionSlug, id, input.slug, trx);
 				}
@@ -1397,6 +1419,12 @@ export class SchemaRegistry {
 			return created;
 		} catch (error) {
 			if (schemaMutated) {
+				// D1 cannot roll back the insert when ADD COLUMN fails. Once storage
+				// exists, later failures must not remove its field metadata.
+				if (!fieldStorageReady) {
+					await this.db.deleteFrom("_emdash_fields").where("id", "=", id).execute();
+				}
+
 				if (activeCoverageInvalidated) {
 					await invalidateContentMediaUsageSchemaChange(this.db, collectionSlug);
 				} else {

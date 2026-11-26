@@ -9,7 +9,6 @@
 import { useLingui } from "@lingui/react/macro";
 import { useQuery } from "@tanstack/react-query";
 import type { NodeViewProps } from "@tiptap/react";
-import { Node, mergeAttributes } from "@tiptap/react";
 import { ReactNodeViewRenderer, NodeViewWrapper } from "@tiptap/react";
 import * as React from "react";
 
@@ -17,7 +16,9 @@ import { fetchMediaItem } from "../../lib/api/media.js";
 import { useStableCallback } from "../../lib/hooks";
 import { canonicalMediaProviderId, getMediaPreviewUrl } from "../../lib/media-utils.js";
 import { cn } from "../../lib/utils";
+import { ImageNode } from "../../portable-text/schema.js";
 import type { ImageAttributes, ImagePanelAttributes } from "./ImageDetailPanel";
+import { useCaptionField, useCaptionText } from "./useCaptionField.js";
 
 // Extend the Commands interface to include setImage
 declare module "@tiptap/react" {
@@ -99,15 +100,25 @@ function ImageNodeView({
 		}
 	};
 
-	const handlePointerDown = (event: React.PointerEvent) => {
-		if (!editor.isEditable || !event.isPrimary || event.button !== 0) return;
+	const selectFromPointer = (event: React.MouseEvent) => {
+		if (!editor.isEditable) return;
 		// The caption selects the image once it has focus, so the toolbar sees that focus.
 		if ((event.target as HTMLElement).closest("figcaption")) return;
 		selectImage();
 	};
 
+	const handlePointerDown = (event: React.PointerEvent) => {
+		// A finger pressing on the image may be scrolling the page, so a tap selects it on click.
+		if (event.pointerType !== "mouse" || !event.isPrimary || event.button !== 0) return;
+		selectFromPointer(event);
+	};
+
 	const caption = typeof node.attrs.caption === "string" ? node.attrs.caption : "";
 	const captionRef = React.useRef<HTMLTextAreaElement>(null);
+	const captionField = useCaptionField(caption);
+	const captionText = useCaptionText(caption, (value) => {
+		if (editor.isEditable) updateAttributes({ caption: value });
+	});
 	// ProseMirror would take text dragged over or dropped on the caption into the document.
 	React.useEffect(() => {
 		const textarea = captionRef.current;
@@ -265,6 +276,7 @@ function ImageNodeView({
 		<NodeViewWrapper
 			style={alignmentStyle}
 			onPointerDown={handlePointerDown}
+			onClick={selectFromPointer}
 			className={cn(
 				"relative my-4 max-w-full",
 				(alignment === "left" || alignment === "right") &&
@@ -291,7 +303,9 @@ function ImageNodeView({
 				{/* Show the caption, never the alt text, as the published renderer (Image.astro) does */}
 				{editor.isEditable ? (
 					// Inline-size containment keeps the placeholder from widening a small image.
-					<figcaption className="mt-2 [contain:inline-size]">
+					<figcaption
+						className={cn("mt-2 [contain:inline-size]", !captionField.shown && "sr-only")}
+					>
 						<textarea
 							ref={captionRef}
 							aria-label={t`Caption`}
@@ -299,11 +313,13 @@ function ImageNodeView({
 							rows={1}
 							tabIndex={-1}
 							dir="auto"
-							value={caption}
-							onChange={(event) => {
-								if (editor.isEditable) updateAttributes({ caption: event.target.value });
+							value={captionText.value}
+							onChange={captionText.onChange}
+							onFocus={() => {
+								captionField.onFocus();
+								selectImage();
 							}}
-							onFocus={selectImage}
+							onBlur={captionField.onBlur}
 							onPointerEnter={(event) => setNodeViewDraggable(event, false)}
 							onPointerLeave={(event) => setNodeViewDraggable(event, true)}
 							onKeyDown={handleCaptionKeyDown}
@@ -321,17 +337,7 @@ function ImageNodeView({
 }
 
 // Custom Image extension with React NodeView
-export const ImageExtension = Node.create({
-	name: "image",
-
-	addOptions() {
-		return {
-			inline: false,
-			allowBase64: false,
-			HTMLAttributes: {},
-		};
-	},
-
+export const ImageExtension = ImageNode.extend({
 	addStorage() {
 		return {
 			/** Callback set by PortableTextEditor to open image settings in the content sidebar */
@@ -350,76 +356,6 @@ export const ImageExtension = Node.create({
 			/** One per mounted image node view, so the toolbar can toggle a given image's settings */
 			settingsHandles: new Set<ImageSettingsHandle>(),
 		};
-	},
-
-	inline() {
-		return this.options.inline;
-	},
-
-	group() {
-		return this.options.inline ? "inline" : "block";
-	},
-
-	draggable: true,
-
-	addAttributes() {
-		return {
-			src: {
-				default: null,
-			},
-			alt: {
-				default: null,
-			},
-			title: {
-				default: null,
-			},
-			caption: {
-				default: null,
-			},
-			mediaId: {
-				default: null,
-			},
-			/** Provider ID for external media (e.g., "cloudflare-images") */
-			provider: {
-				default: null,
-			},
-			width: {
-				default: null,
-			},
-			height: {
-				default: null,
-			},
-			blurhash: {
-				default: null,
-			},
-			dominantColor: {
-				default: null,
-			},
-			displayWidth: {
-				default: null,
-			},
-			displayHeight: {
-				default: null,
-			},
-			alignment: {
-				default: null,
-			},
-			link: {
-				default: null,
-			},
-		};
-	},
-
-	parseHTML() {
-		return [
-			{
-				tag: "img[src]",
-			},
-		];
-	},
-
-	renderHTML({ HTMLAttributes }: { HTMLAttributes: Record<string, unknown> }) {
-		return ["img", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
 	},
 
 	addNodeView() {

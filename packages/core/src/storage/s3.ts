@@ -332,6 +332,10 @@ export class S3Storage implements Storage {
 		}
 	}
 
+	getClientUploadOrigin(): string {
+		return new URL(this.endpoint).origin;
+	}
+
 	async getSignedUploadUrl(options: SignedUploadOptions): Promise<SignedUploadUrl> {
 		try {
 			const expiresIn = options.expiresIn || 3600; // 1 hour default

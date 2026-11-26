@@ -9,7 +9,7 @@
 import type { APIRoute } from "astro";
 
 import { requirePerm } from "#api/authorize.js";
-import { apiError, handleError, requireDb, unwrapResult } from "#api/error.js";
+import { apiError, handleError, unwrapResult } from "#api/error.js";
 import {
 	handleRedirectDelete,
 	handleRedirectGet,
@@ -17,13 +17,15 @@ import {
 } from "#api/handlers/redirects.js";
 import { isParseError, parseBody } from "#api/parse.js";
 import { updateRedirectBody } from "#api/schemas.js";
+import { invalidateRedirectSourcePaths } from "#cache/redirect-paths.js";
 
 export const prerender = false;
 
 export const GET: APIRoute = async ({ params, locals }) => {
 	const { emdash, user } = locals;
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 	const db = emdash.db;
 	const { id } = params;
 
@@ -42,10 +44,11 @@ export const GET: APIRoute = async ({ params, locals }) => {
 	}
 };
 
-export const PUT: APIRoute = async ({ params, request, locals }) => {
+export const PUT: APIRoute = async ({ params, request, locals, cache }) => {
 	const { emdash, user } = locals;
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 	const db = emdash.db;
 	const { id } = params;
 
@@ -57,20 +60,27 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
 	}
 
 	try {
+		const before = await handleRedirectGet(db, id);
+		if (!before.success) return unwrapResult(before);
+
 		const body = await parseBody(request, updateRedirectBody);
 		if (isParseError(body)) return body;
 
 		const result = await handleRedirectUpdate(db, id, body);
+		if (result.success) {
+			await invalidateRedirectSourcePaths(cache, before.data.source, result.data.source);
+		}
 		return unwrapResult(result);
 	} catch (error) {
 		return handleError(error, "Failed to update redirect", "REDIRECT_UPDATE_ERROR");
 	}
 };
 
-export const DELETE: APIRoute = async ({ params, locals }) => {
+export const DELETE: APIRoute = async ({ params, locals, cache }) => {
 	const { emdash, user } = locals;
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 	const db = emdash.db;
 	const { id } = params;
 
@@ -82,7 +92,13 @@ export const DELETE: APIRoute = async ({ params, locals }) => {
 	}
 
 	try {
+		const before = await handleRedirectGet(db, id);
+		if (!before.success) return unwrapResult(before);
+
 		const result = await handleRedirectDelete(db, id);
+		if (result.success) {
+			await invalidateRedirectSourcePaths(cache, before.data.source);
+		}
 		return unwrapResult(result);
 	} catch (error) {
 		return handleError(error, "Failed to delete redirect", "REDIRECT_DELETE_ERROR");

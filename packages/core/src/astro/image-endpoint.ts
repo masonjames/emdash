@@ -13,9 +13,15 @@ import type { APIRoute } from "astro";
 import { GET as genericGET } from "astro/assets/endpoint/generic";
 // @ts-ignore - astro:assets is resolved by the consumer's Astro build
 import { getConfiguredImageService, imageConfig } from "astro:assets";
+// @ts-ignore - virtual module
+import virtualConfig from "virtual:emdash/config";
 
 import {
+	cacheMediaResponse,
+	canonicalTransformRedirect,
+	canonicalTransformSearch,
 	getTransformFingerprint,
+	isCacheableMediaSource,
 	isHeicMedia,
 	matchInternalMediaKey,
 	MUTABLE_MEDIA_CACHE_CONTROL,
@@ -57,10 +63,16 @@ function streamOriginal(
 	});
 }
 
-function notModifiedResponse(size: number, lastModified?: Date, suffix?: string): Response {
+function notModifiedResponse(
+	contentType: string,
+	size: number,
+	lastModified?: Date,
+	suffix?: string,
+): Response {
 	return new Response(null, {
 		status: 304,
 		headers: {
+			"Content-Type": contentType,
 			"Cache-Control": MUTABLE_MEDIA_CACHE_CONTROL,
 			"X-Content-Type-Options": "nosniff",
 			...validatorHeaders(size, lastModified, suffix),
@@ -84,6 +96,16 @@ export const GET: APIRoute = async (ctx) => {
 	const service = await getConfiguredImageService();
 	let transformingHeic = false;
 
+	// Astro adds the adapter's assetQueryParams; the public astro:assets type omits it.
+	const config: typeof imageConfig & { assetQueryParams?: URLSearchParams } = imageConfig;
+	const isStockService = imageConfig.service?.entrypoint === "astro/assets/services/sharp";
+	if (isStockService) {
+		const canonical = canonicalTransformSearch(url, config.assetQueryParams);
+		if (canonical !== null) return canonicalTransformRedirect(url, canonical);
+	}
+
+	// An unread download retains its storage connection even for a bodyless response.
+	let unusedBody: ReadableStream<Uint8Array> | undefined;
 	try {
 		if (!("transform" in service)) {
 			const parsed = parseTransformParams(url.searchParams);
@@ -124,44 +146,78 @@ export const GET: APIRoute = async (ctx) => {
 			if (isHeicMedia("", key)) return unsupportedHeic();
 
 			const source = await storage.download(key);
+			unusedBody = source.body;
 			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				await source.body.cancel().catch(() => undefined);
-				return notModifiedResponse(source.size, source.lastModified);
+				return notModifiedResponse(source.contentType, source.size, source.lastModified);
 			}
-			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
+			const response = streamOriginal(
+				source.body,
+				source.contentType,
+				source.size,
+				source.lastModified,
+			);
+			if (ctx.request.method === "HEAD") return new Response(null, response);
+			unusedBody = undefined;
+			return response;
 		}
 
 		const source = await storage.download(key);
+		unusedBody = source.body;
 		transformingHeic = isHeicMedia(source.contentType, key);
 
 		// Only raster images are transformable; serve anything else unchanged.
 		if (!source.contentType.startsWith("image/")) {
 			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				await source.body.cancel().catch(() => undefined);
-				return notModifiedResponse(source.size, source.lastModified);
+				return notModifiedResponse(source.contentType, source.size, source.lastModified);
 			}
-			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
+			const response = streamOriginal(
+				source.body,
+				source.contentType,
+				source.size,
+				source.lastModified,
+			);
+			if (ctx.request.method === "HEAD") return new Response(null, response);
+			unusedBody = undefined;
+			return response;
 		}
 
-		const transform = await service.parseURL(url, imageConfig);
+		const transform = await service.parseURL(url, imageConfig, ctx.logger);
 		if (!transform) {
 			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				await source.body.cancel().catch(() => undefined);
-				return notModifiedResponse(source.size, source.lastModified);
+				return notModifiedResponse(source.contentType, source.size, source.lastModified);
 			}
-			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
+			const response = streamOriginal(
+				source.body,
+				source.contentType,
+				source.size,
+				source.lastModified,
+			);
+			if (ctx.request.method === "HEAD") return new Response(null, response);
+			unusedBody = undefined;
+			return response;
 		}
 
 		const fingerprint = getTransformFingerprint(url.searchParams);
 		if (isNotModified(ctx.request, source.size, source.lastModified, fingerprint)) {
-			await source.body.cancel().catch(() => undefined);
-			return notModifiedResponse(source.size, source.lastModified, fingerprint);
+			return notModifiedResponse(source.contentType, source.size, source.lastModified, fingerprint);
 		}
 
 		const inputBuffer = new Uint8Array(await new Response(source.body).arrayBuffer());
-		const { data, format } = await service.transform(inputBuffer, transform, imageConfig);
+		const { data, format } = await service.transform(
+			inputBuffer,
+			transform,
+			imageConfig,
+			ctx.logger,
+		);
 
-		return new Response(data, {
+		if (
+			isStockService &&
+			virtualConfig?.routeCacheProvider !== "memory" &&
+			isCacheableMediaSource(url.searchParams.get("href"), url)
+		) {
+			cacheMediaResponse(ctx.cache, key);
+		}
+		return new Response(new Uint8Array(data), {
 			status: 200,
 			headers: {
 				"Content-Type": FORMAT_MIME[format] ?? source.contentType,
@@ -175,5 +231,7 @@ export const GET: APIRoute = async (ctx) => {
 		if (transformingHeic) return unsupportedHeic();
 		console.error("[emdash] image transform failed:", error);
 		return new Response("Internal Server Error", { status: 500 });
+	} finally {
+		if (unusedBody && !unusedBody.locked) await unusedBody.cancel().catch(() => undefined);
 	}
 };

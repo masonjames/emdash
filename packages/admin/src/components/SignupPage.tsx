@@ -25,7 +25,9 @@ export function VerificationSentMessage({ email }: { email: string }) {
 	return (
 		<Trans>
 			We've sent a verification link to{" "}
-			<span className="font-medium text-kumo-default">{email}</span>
+			<span dir="ltr" className="font-medium text-kumo-default">
+				{email}
+			</span>
 		</Trans>
 	);
 }
@@ -81,6 +83,7 @@ function EmailStep({ onSubmit, isLoading, error }: EmailStepProps) {
 			<div className="space-y-4">
 				<div>
 					<Input
+						dir="ltr"
 						label={t`Email address`}
 						type="email"
 						value={email}
@@ -212,7 +215,13 @@ function VerifyStep({ verifyResult, token, onBack: _onBack }: VerifyStepProps) {
 
 			{!passkeyComplete && (
 				<>
-					<Input label={t`Email`} value={verifyResult.email} disabled className="bg-kumo-tint" />
+					<Input
+						dir="ltr"
+						label={t`Email`}
+						value={verifyResult.email}
+						disabled
+						className="bg-kumo-tint"
+					/>
 
 					<Input
 						label={t`Your name (optional)`}
@@ -228,7 +237,7 @@ function VerifyStep({ verifyResult, token, onBack: _onBack }: VerifyStepProps) {
 			{/* Passkey registration */}
 			<div className="pt-4 border-t">
 				<PasskeyRegistration
-					optionsEndpoint="/_emdash/api/setup/admin"
+					optionsEndpoint="/_emdash/api/auth/signup/register-options"
 					verifyEndpoint="/_emdash/api/auth/signup/complete"
 					onSuccess={handleSignupSuccess}
 					additionalData={{ token, name: name || undefined }}

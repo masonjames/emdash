@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 
+import { handleSchemaFieldCreate } from "../../../src/api/handlers/schema.js";
 import { IdentifierError } from "../../../src/database/validate.js";
 import {
 	buildContentMediaUsageFieldFingerprint,
@@ -33,6 +34,7 @@ describeEachDialect("content media usage field discovery", (dialect) => {
 		await registry.createField("posts", { slug: "name", label: "Name", type: "string" });
 		await registry.createField("posts", { slug: "body", label: "Body", type: "portableText" });
 		await registry.createField("posts", { slug: "title", label: "Title", type: "string" });
+		await registry.createField("posts", { slug: "link", label: "Link", type: "url" });
 		await registry.createField("posts", { slug: "raw_data", label: "Raw Data", type: "json" });
 		await registry.createField("posts", { slug: "attachment", label: "Attachment", type: "file" });
 		await registry.createField("posts", { slug: "hero", label: "Hero", type: "image" });
@@ -42,8 +44,9 @@ describeEachDialect("content media usage field discovery", (dialect) => {
 			type: "repeater",
 			validation: {
 				subFields: [
-					{ slug: "caption", type: "text", label: "Caption" },
+					{ slug: "caption", type: "string", label: "Caption" },
 					{ slug: "image", type: "image", label: "Image" },
+					{ slug: "link", type: "url", label: "Link" },
 				],
 			},
 		});
@@ -55,11 +58,20 @@ describeEachDialect("content media usage field discovery", (dialect) => {
 			{ slug: "attachment", type: "file" },
 			{ slug: "body", type: "portableText" },
 			{ slug: "hero", type: "image" },
+			{ slug: "link", type: "url" },
+			{ slug: "name", type: "string" },
 			{
 				slug: "sections",
 				type: "repeater",
-				validation: { subFields: [{ slug: "image", type: "image" }] },
+				validation: {
+					subFields: [
+						{ slug: "caption", type: "string" },
+						{ slug: "image", type: "image" },
+						{ slug: "link", type: "url" },
+					],
+				},
 			},
+			{ slug: "title", type: "string" },
 		]);
 	});
 
@@ -85,6 +97,7 @@ describeEachDialect("content media usage field discovery", (dialect) => {
 						{ slug: "download", type: "file", label: "Download" },
 						{ slug: "image", type: "image", label: "Image" },
 						{ slug: "caption", type: "text", label: "Caption" },
+						{ slug: "link", type: "url", label: "Link" },
 					],
 				}),
 			})
@@ -106,7 +119,12 @@ describeEachDialect("content media usage field discovery", (dialect) => {
 			{
 				slug: "sections",
 				type: "repeater",
-				validation: { subFields: [{ slug: "image", type: "image" }] },
+				validation: {
+					subFields: [
+						{ slug: "image", type: "image" },
+						{ slug: "link", type: "url" },
+					],
+				},
 			},
 		]);
 	});
@@ -217,6 +235,21 @@ describeEachDialect("content media usage field discovery", (dialect) => {
 			.execute();
 
 		await expect(loadContentMediaUsageFields(ctx.db, "posts")).rejects.toThrow(IdentifierError);
+	});
+
+	it("keeps a reference field bound to a relation out of the display fields", async () => {
+		await registry.createField("posts", { slug: "title", label: "Title", type: "string" });
+		const created = await handleSchemaFieldCreate(ctx.db, "posts", {
+			slug: "name",
+			label: "Name",
+			type: "reference",
+			validation: { targetCollection: "posts" },
+		});
+		expect(created.success).toBe(true);
+
+		const discovery = await loadContentMediaUsageFields(ctx.db, "posts");
+
+		expect(discovery.displayFieldSlugs).toEqual(["title"]);
 	});
 
 	it("fingerprints exact extraction and display-field definitions independent of row order", async () => {

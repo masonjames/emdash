@@ -13,6 +13,7 @@ import { InvalidCursorError } from "../../database/repositories/types.js";
 import type { ContentItem } from "../../database/repositories/types.js";
 import { withTransaction } from "../../database/transaction.js";
 import type { Database } from "../../database/types.js";
+import { getLocaleCandidates, getLocaleRank } from "../../i18n/config.js";
 import { invalidateCollectionCache } from "../../object-cache/index.js";
 import {
 	pageStagedGroups,
@@ -20,6 +21,7 @@ import {
 	type PageOfGroups,
 } from "../../references/staged.js";
 import { requestCached } from "../../request-cache.js";
+import { hasRoomNotifier, notifyEntryGroups } from "../../rooms/notifications.js";
 import { invalidateSchemaCache } from "../../schema/index.js";
 import { SchemaRegistry } from "../../schema/registry.js";
 import type { ApiResult } from "../types.js";
@@ -378,7 +380,20 @@ async function resolveRelation(
  * `locale` so callers never mistake a fallback for the requested locale.
  */
 function pickVariant(items: ContentItem[], locale: string | null): ContentItem | undefined {
-	return items.find((i) => i.locale === locale) ?? items[0];
+	if (locale === null) return items[0];
+
+	const candidates = getLocaleCandidates(locale);
+	let best: ContentItem | undefined;
+	let bestRank = candidates.length;
+	for (const item of items) {
+		if (item.locale === null) continue;
+		const rank = getLocaleRank(item.locale, locale);
+		if (rank < bestRank) {
+			best = item;
+			bestRank = rank;
+		}
+	}
+	return best ?? items[0];
 }
 
 /**
@@ -787,10 +802,15 @@ export async function writeReferenceSelection(
 	const rel = await resolveRelation(repo, selection.relation);
 	if (!rel) return;
 
-	const rejected =
-		selection.side === "parent"
-			? await repo.setChildren(rel.id, selection.entryGroup, selection.groups)
-			: await repo.setParents(rel.id, selection.entryGroup, selection.groups);
+	const parentSide = selection.side === "parent";
+	const before = !hasRoomNotifier()
+		? []
+		: parentSide
+			? await repo.getChildren(rel.id, selection.entryGroup)
+			: await repo.getParents(rel.id, selection.entryGroup);
+	const rejected = parentSide
+		? await repo.setChildren(rel.id, selection.entryGroup, selection.groups)
+		: await repo.setParents(rel.id, selection.entryGroup, selection.groups);
 	if (rejected.length > 0) {
 		const farSide = selection.side === "parent" ? "parent" : "child";
 		throw Object.assign(
@@ -808,6 +828,16 @@ export async function writeReferenceSelection(
 	if (rel.childCollection !== rel.parentCollection) {
 		invalidateCollectionCache(rel.childCollection);
 	}
+
+	// Rooms on both ends show the link, as a selection or as backlinks.
+	const [ownCollection, farCollection] = parentSide
+		? [rel.parentCollection, rel.childCollection]
+		: [rel.childCollection, rel.parentCollection];
+	const linked = new Set(before.map((link) => (parentSide ? link.childGroup : link.parentGroup)));
+	const added = selection.groups.filter((group) => !linked.has(group));
+	const removed = [...linked].filter((group) => !selection.groups.includes(group));
+	await notifyEntryGroups(db, ownCollection, [selection.entryGroup], ["references"]);
+	await notifyEntryGroups(db, farCollection, [...added, ...removed], ["references"]);
 }
 
 /**

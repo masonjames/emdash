@@ -7,7 +7,7 @@
 
 import type { APIRoute } from "astro";
 
-import { apiError, handleError, requireDb, unwrapResult } from "#api/error.js";
+import { apiError, handleError, unwrapResult } from "#api/error.js";
 import { handleCommentList } from "#api/handlers/comments.js";
 import { submitPublicComment } from "#comments/public-submission.js";
 
@@ -24,8 +24,9 @@ export const GET: APIRoute = async ({ params, url, locals }) => {
 		return apiError("VALIDATION_ERROR", "Collection and content ID required", 400);
 	}
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	try {
 		const limit = Math.min(Number(url.searchParams.get("limit") || 50), 100);
@@ -62,7 +63,7 @@ export const GET: APIRoute = async ({ params, url, locals }) => {
 /**
  * Submit a comment (public, gated by anti-spam checks)
  */
-export const POST: APIRoute = async ({ params, request, locals }) => {
+export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 	const { emdash, user } = locals;
 	const { collection, contentId } = params;
 
@@ -70,7 +71,8 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
 		return apiError("VALIDATION_ERROR", "Collection and content ID required", 400);
 	}
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
-	return submitPublicComment(emdash, collection, contentId, request, user);
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
+	return submitPublicComment(emdash, collection, contentId, request, user, cache);
 };

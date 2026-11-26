@@ -16,11 +16,20 @@ import type { APIContext } from "astro";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resolveFieldAllowlist } from "../../../src/api/handlers/media-allowlist.js";
 import { POST as postMedia } from "../../../src/astro/routes/api/media.js";
 import { POST as postUploadUrl } from "../../../src/astro/routes/api/media/upload-url.js";
 import type { Database } from "../../../src/database/types.js";
+import { BlockTypeRegistry } from "../../../src/schema/block-type-registry.js";
 import { SchemaRegistry } from "../../../src/schema/registry.js";
-import { setupTestDatabase, teardownTestDatabase } from "../../utils/test-db.js";
+import {
+	describeEachDialect,
+	setupForDialect,
+	setupTestDatabase,
+	teardownForDialect,
+	teardownTestDatabase,
+	type DialectTestContext,
+} from "../../utils/test-db.js";
 
 // ---------------------------------------------------------------------------
 // Minimal in-memory storage stub
@@ -129,12 +138,19 @@ function buildContext(opts: {
 	} as unknown as APIContext;
 }
 
-function buildUploadRequest(opts: { file: File; fieldId?: string }): Request {
+function buildUploadRequest(opts: {
+	file: File;
+	fieldId?: string;
+	blockType?: string;
+	blockVersion?: number;
+}): Request {
 	const formData = new FormData();
 	formData.append("file", opts.file);
 	if (opts.fieldId) {
 		formData.append("fieldId", opts.fieldId);
 	}
+	if (opts.blockType) formData.append("blockType", opts.blockType);
+	if (opts.blockVersion !== undefined) formData.append("blockVersion", String(opts.blockVersion));
 	return new Request("http://localhost/_emdash/api/media", {
 		method: "POST",
 		headers: {
@@ -365,15 +381,17 @@ function buildUploadUrlRequest(opts: {
 	filename: string;
 	size: number;
 	fieldId?: string;
+	blockType?: string;
+	blockVersion?: number;
 }): Request {
 	const body: Record<string, unknown> = {
 		filename: opts.filename,
 		contentType: opts.contentType,
 		size: opts.size,
 	};
-	if (opts.fieldId) {
-		body.fieldId = opts.fieldId;
-	}
+	if (opts.fieldId) body.fieldId = opts.fieldId;
+	if (opts.blockType) body.blockType = opts.blockType;
+	if (opts.blockVersion !== undefined) body.blockVersion = opts.blockVersion;
 	return new Request("http://localhost/_emdash/api/media/upload-url", {
 		method: "POST",
 		headers: {
@@ -476,4 +494,441 @@ describe("POST /media/upload-url — upload widening via fieldId", () => {
 		const body = (await res.json()) as { error?: { code: string } };
 		expect(body.error?.code).toBe("INVALID_TYPE");
 	});
+});
+
+describeEachDialect("nested block field upload allowlists", (dialect) => {
+	let ctx: DialectTestContext;
+	let outerFieldId: string;
+	let imageFieldId: string;
+	let repeaterFieldId: string;
+	const composite = () => `${outerFieldId}:k1:file`;
+
+	beforeEach(async () => {
+		ctx = await setupForDialect(dialect);
+		const schema = new SchemaRegistry(ctx.db);
+		const blocks = new BlockTypeRegistry(ctx.db);
+		await schema.createCollection({ slug: "article", label: "Articles", labelSingular: "Article" });
+		const image = await schema.createField("article", {
+			slug: "thumbnail",
+			label: "Thumbnail",
+			type: "image",
+			validation: { allowedMimeTypes: ["image/"] },
+		});
+		imageFieldId = image.id;
+		const repeaterValidation = {
+			subFields: [
+				{
+					slug: "logo",
+					label: "Logo",
+					type: "image" as const,
+					validation: { allowedMimeTypes: ["image/svg+xml"] },
+				},
+				{ slug: "photo", label: "Photo", type: "image" as const },
+				{ slug: "name", label: "Name", type: "string" as const },
+			],
+		};
+		const repeater = await schema.createField("article", {
+			slug: "partners",
+			label: "Partners",
+			type: "repeater",
+			validation: repeaterValidation,
+		});
+		repeaterFieldId = repeater.id;
+		await blocks.createBlockType({
+			slug: "attachment",
+			label: "Attachment",
+			fields: [
+				{ slug: "label", label: "Label", type: "string" },
+				{ slug: "partners", label: "Partners", type: "repeater", validation: repeaterValidation },
+				{
+					slug: "file",
+					label: "File",
+					type: "file",
+					validation: { allowedMimeTypes: ["application/msword"] },
+				},
+			],
+		});
+		const outer = await schema.createField("article", {
+			slug: "attachments",
+			label: "Attachments",
+			type: "blocks",
+			validation: { allowedTypes: ["attachment"] },
+		});
+		outerFieldId = outer.id;
+		await blocks.createBlockType({
+			slug: "other_attachment",
+			label: "Other attachment",
+			fields: [
+				{
+					slug: "file",
+					label: "File",
+					type: "file",
+					validation: { allowedMimeTypes: ["application/msword"] },
+				},
+			],
+		});
+	});
+
+	afterEach(async () => {
+		await teardownForDialect(ctx);
+	});
+
+	const cases = [
+		{
+			name: "repeater image opt-in",
+			fieldId: () => `${repeaterFieldId}.logo`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: true,
+		},
+		{
+			name: "block repeater image opt-in",
+			fieldId: () => `${outerFieldId}:k1:partners.logo`,
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "image/svg+xml",
+			ok: true,
+		},
+		{
+			name: "repeater sibling without opt-in",
+			fieldId: () => `${repeaterFieldId}.photo`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "block repeater sibling without opt-in",
+			fieldId: () => `${outerFieldId}:k1:partners.photo`,
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "non-image repeater sub-field",
+			fieldId: () => `${repeaterFieldId}.name`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "unknown repeater sub-field",
+			fieldId: () => `${repeaterFieldId}.missing`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "unknown repeater parent",
+			fieldId: () => `missing.logo`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "non-repeater parent",
+			fieldId: () => `${imageFieldId}.logo`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "missing block repeater context",
+			fieldId: () => `${outerFieldId}:k1:partners.logo`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "extra repeater path segment",
+			fieldId: () => `${repeaterFieldId}.logo.extra`,
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "valid block context",
+			fieldId: () => composite(),
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "application/msword",
+			ok: true,
+		},
+		{
+			name: "block key containing colons",
+			fieldId: () => `${outerFieldId}:imported:key:file`,
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "application/msword",
+			ok: true,
+		},
+		{
+			name: "mismatched MIME type",
+			fieldId: () => composite(),
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "application/pdf",
+			ok: false,
+		},
+		{
+			name: "unknown block version",
+			fieldId: () => composite(),
+			blockType: "attachment",
+			blockVersion: 99,
+			type: "application/msword",
+			ok: false,
+		},
+		{
+			name: "unknown block version for repeater image",
+			fieldId: () => `${outerFieldId}:k1:partners.logo`,
+			blockType: "attachment",
+			blockVersion: 99,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "unauthorized block type for repeater image",
+			fieldId: () => `${outerFieldId}:k1:partners.logo`,
+			blockType: "other_attachment",
+			blockVersion: 1,
+			type: "image/svg+xml",
+			ok: false,
+		},
+		{
+			name: "missing block context",
+			fieldId: () => composite(),
+			blockType: undefined,
+			blockVersion: undefined,
+			type: "application/msword",
+			ok: false,
+		},
+		{
+			name: "non-media nested slug",
+			fieldId: () => `${outerFieldId}:k1:label`,
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "application/msword",
+			ok: false,
+		},
+		{
+			name: "unknown outer field",
+			fieldId: () => "missing:k1:file",
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "application/msword",
+			ok: false,
+		},
+		{
+			name: "wrong outer field type",
+			fieldId: () => `${imageFieldId}:k1:file`,
+			blockType: "attachment",
+			blockVersion: 1,
+			type: "application/msword",
+			ok: false,
+		},
+		{
+			name: "block type not allowed by outer field",
+			fieldId: () => composite(),
+			blockType: "other_attachment",
+			blockVersion: 1,
+			type: "application/msword",
+			ok: false,
+		},
+	] as const;
+
+	for (const route of ["media", "upload-url"] as const) {
+		describe(`POST /${route}`, () => {
+			for (const testCase of cases) {
+				it(testCase.name, async () => {
+					const type = testCase.type;
+					const filename = type === "image/svg+xml" ? "logo.svg" : "form.doc";
+					const contents =
+						type === "image/svg+xml" ? '<svg xmlns="http://www.w3.org/2000/svg" />' : "word";
+					const storage =
+						route === "media" ? createMemoryStorage() : { storage: createSignedUrlStorage() };
+					const request =
+						route === "media"
+							? buildUploadRequest({
+									file: new File([contents], filename, { type }),
+									fieldId: testCase.fieldId(),
+									blockType: testCase.blockType,
+									blockVersion: testCase.blockVersion,
+								})
+							: buildUploadUrlRequest({
+									filename,
+									contentType: type,
+									size: contents.length,
+									fieldId: testCase.fieldId(),
+									blockType: testCase.blockType,
+									blockVersion: testCase.blockVersion,
+								});
+					const response =
+						route === "media"
+							? await postMedia(buildContext({ db: ctx.db, request, storage: storage.storage }))
+							: await postUploadUrl(
+									buildUploadUrlContext({ db: ctx.db, request, storage: storage.storage }),
+								);
+					expect(response.status).toBe(testCase.ok ? (route === "media" ? 201 : 200) : 400);
+					if (!testCase.ok) {
+						expect(await response.json()).toMatchObject({ error: { code: "INVALID_TYPE" } });
+					}
+				});
+			}
+		});
+	}
+
+	it.each([["image/svg+xml", 1], [".svg"]])(
+		"falls back to the global allowlist for malformed stored repeater MIME lists: %j",
+		async (...allowedMimeTypes) => {
+			await ctx.db
+				.updateTable("_emdash_fields")
+				.set({
+					validation: JSON.stringify({
+						subFields: [
+							{
+								slug: "logo",
+								label: "Logo",
+								type: "image",
+								validation: { allowedMimeTypes },
+							},
+						],
+					}),
+				})
+				.where("id", "=", repeaterFieldId)
+				.execute();
+			expect(await resolveFieldAllowlist(ctx.db, `${repeaterFieldId}.logo`)).toBeNull();
+		},
+	);
+
+	it("uses retained repeater allowlists after their block type is retired", async () => {
+		await new SchemaRegistry(ctx.db).updateField("article", "attachments", {
+			validation: { allowedTypes: [], retiredTypes: ["attachment"] },
+		});
+		const request = buildUploadRequest({
+			file: new File(["svg"], "logo.svg", { type: "image/svg+xml" }),
+			fieldId: `${outerFieldId}:k1:partners.logo`,
+			blockType: "attachment",
+			blockVersion: 1,
+		});
+		const response = await postMedia(
+			buildContext({ db: ctx.db, request, storage: createMemoryStorage().storage }),
+		);
+		expect(response.status).toBe(201);
+	});
+
+	it("retains version 1's nested allowlist after a version 2 narrowing", async () => {
+		const blocks = new BlockTypeRegistry(ctx.db);
+		const current = await blocks.getBlockType("attachment");
+		expect(current).not.toBeNull();
+		await blocks.updateBlockType("attachment", {
+			expectedFingerprint: current!.versions[0]!.fingerprint,
+			fields: [
+				{
+					slug: "partners",
+					label: "Partners",
+					type: "repeater",
+					validation: {
+						subFields: [
+							{
+								slug: "logo",
+								label: "Logo",
+								type: "image",
+								validation: { allowedMimeTypes: ["image/png"] },
+							},
+						],
+					},
+				},
+			],
+			breaking: true,
+		});
+		const { storage } = createMemoryStorage();
+		const request = buildUploadRequest({
+			file: new File(["svg"], "logo.svg", { type: "image/svg+xml" }),
+			fieldId: `${outerFieldId}:k1:partners.logo`,
+			blockType: "attachment",
+			blockVersion: 1,
+		});
+		const response = await postMedia(buildContext({ db: ctx.db, request, storage }));
+		expect(response.status).toBe(201);
+	});
+
+	it("uses retained block types after they are retired from the outer field", async () => {
+		await new SchemaRegistry(ctx.db).updateField("article", "attachments", {
+			validation: { allowedTypes: [], retiredTypes: [] },
+		});
+		const request = buildUploadUrlRequest({
+			filename: "form.doc",
+			contentType: "application/msword",
+			size: 4,
+			fieldId: composite(),
+			blockType: "attachment",
+			blockVersion: 1,
+		});
+		const response = await postUploadUrl(
+			buildUploadUrlContext({
+				db: ctx.db,
+				request,
+				storage: createSignedUrlStorage(),
+			}),
+		);
+		expect(response.status).toBe(200);
+	});
+
+	it("retains version 1's allowlist after a version 2 change", async () => {
+		const blocks = new BlockTypeRegistry(ctx.db);
+		const current = await blocks.getBlockType("attachment");
+		expect(current).not.toBeNull();
+		await blocks.updateBlockType("attachment", {
+			expectedFingerprint: current!.versions[0]!.fingerprint,
+			fields: [
+				{
+					slug: "file",
+					label: "File",
+					type: "file",
+					validation: { allowedMimeTypes: ["application/pdf"] },
+				},
+			],
+			breaking: true,
+		});
+		const { storage } = createMemoryStorage();
+		const request = buildUploadRequest({
+			file: new File(["word"], "form.doc", { type: "application/msword" }),
+			fieldId: composite(),
+			blockType: "attachment",
+			blockVersion: 1,
+		});
+		const response = await postMedia(buildContext({ db: ctx.db, request, storage }));
+		expect(response.status).toBe(201);
+	});
+
+	it.each([
+		["invalid JSON", "not-json"],
+		["invalid subFields", JSON.stringify({ subFields: {} })],
+	])(
+		"falls back to the global allowlist for repeater validation with %s",
+		async (_label, validation) => {
+			await ctx.db
+				.updateTable("_emdash_fields")
+				.set({ validation })
+				.where("id", "=", repeaterFieldId)
+				.execute();
+			const request = buildUploadRequest({
+				file: new File(["svg"], "logo.svg", { type: "image/svg+xml" }),
+				fieldId: `${repeaterFieldId}.logo`,
+			});
+			const response = await postMedia(
+				buildContext({ db: ctx.db, request, storage: createMemoryStorage().storage }),
+			);
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({ error: { code: "INVALID_TYPE" } });
+		},
+	);
 });

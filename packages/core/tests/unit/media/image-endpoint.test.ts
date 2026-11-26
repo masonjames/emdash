@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import {
+	canonicalTransformSearch,
 	matchInternalMediaKey,
 	resolveExternalImageServiceUrl,
 	isSafeTransformKey,
@@ -181,11 +182,48 @@ describe("parseTransformParams", () => {
 		expect(parse("w=640&h=-1").ok).toBe(false);
 	});
 
-	it("rejects unsupported format and bad quality", () => {
+	it.each([
+		["low", 25],
+		["mid", 50],
+		["high", 80],
+		["max", 100],
+		["70.6", 71],
+		["80.5", 81],
+		["0", 1],
+		["101", 100],
+		["150", 100],
+		["-5", 1],
+		["1e-7", 1],
+		["1e+21", 100],
+		["1", 1],
+		["100", 100],
+	])("parses quality %s as %s", (quality, expected) => {
+		const result = parse(`w=640&q=${encodeURIComponent(quality)}`);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.options.quality).toBe(expected);
+	});
+
+	it.each([
+		"",
+		"   ",
+		" 70 ",
+		"0x10",
+		"0b10",
+		"1e309",
+		"NaN",
+		"Infinity",
+		"-Infinity",
+		"unknown",
+		"constructor",
+		"toString",
+		"__proto__",
+	])("rejects invalid quality %s", (quality) => {
+		const result = parse(`w=640&q=${encodeURIComponent(quality)}`);
+		expect(result.ok).toBe(false);
+	});
+
+	it("rejects unsupported format", () => {
 		expect(parse("w=640&f=gif").ok).toBe(false);
-		expect(parse("w=640&q=0").ok).toBe(false);
-		expect(parse("w=640&q=101").ok).toBe(false);
-		expect(parse("w=640&q=foo").ok).toBe(false);
 	});
 
 	it("rejects exotic numeric encodings for dimensions", () => {
@@ -221,6 +259,10 @@ describe("originalMediaHeaders", () => {
 		expect(h["Content-Disposition"]).toBe("inline");
 		expect(h["X-Content-Type-Options"]).toBe("nosniff");
 		expect(h["Content-Security-Policy"]).toContain("sandbox");
+	});
+
+	it("renders image/bmp inline, same as the other safe raster types", () => {
+		expect(originalMediaHeaders("image/bmp")["Content-Disposition"]).toBe("inline");
 	});
 
 	it("forces attachment + sandbox for SVG and other active types", () => {
@@ -357,5 +399,56 @@ describe("isNotModified", () => {
 			headers: { "If-None-Match": makeWeakEtag(1234, lastModified, suffix) },
 		});
 		expect(isNotModified(request, 1234, lastModified, suffix)).toBe(true);
+	});
+});
+
+describe("canonicalTransformSearch", () => {
+	const href = "https://example.com/_emdash/api/media/file/01ABC.png";
+	const encodedHref = encodeURIComponent(href);
+
+	function canonicalOf(search: string, assetQueryParams?: URLSearchParams): string | null {
+		return canonicalTransformSearch(new URL(`http://localhost/_image?${search}`), assetQueryParams);
+	}
+
+	it("accepts the query Astro's getURL writes for a cover image", () => {
+		const search = `href=${encodedHref}&w=1200&h=536&q=80&f=webp&fit=cover&position=center&background=%23fff`;
+		expect(canonicalOf(search)).toBeNull();
+	});
+
+	it("accepts a query with only some parameters", () => {
+		expect(canonicalOf(`href=${encodedHref}&w=150&f=webp`)).toBeNull();
+	});
+
+	it("reorders parameters into Astro's order", () => {
+		expect(canonicalOf(`f=webp&w=150&href=${encodedHref}`)).toBe(
+			`href=${encodedHref}&w=150&f=webp`,
+		);
+	});
+
+	it("drops unknown parameters", () => {
+		expect(canonicalOf(`href=${encodedHref}&w=150&cachebust=123`)).toBe(
+			`href=${encodedHref}&w=150`,
+		);
+	});
+
+	it("keeps the first value of a repeated parameter", () => {
+		expect(canonicalOf(`href=${encodedHref}&w=150&w=9000`)).toBe(`href=${encodedHref}&w=150`);
+	});
+
+	it("keeps the adapter's asset query parameters after the transform parameters", () => {
+		const assetQueryParams = new URLSearchParams("dpl=abc");
+		expect(canonicalOf(`href=${encodedHref}&w=150&dpl=abc`, assetQueryParams)).toBeNull();
+		expect(canonicalOf(`dpl=abc&href=${encodedHref}&w=150`, assetQueryParams)).toBe(
+			`href=${encodedHref}&w=150&dpl=abc`,
+		);
+	});
+
+	it("re-encodes a query whose values match but whose encoding differs", () => {
+		expect(canonicalOf(`href=${href}&w=150`)).toBe(`href=${encodedHref}&w=150`);
+	});
+
+	it("accepts its own output, so a redirect never loops", () => {
+		const target = canonicalOf(`w=150&href=${href}&x=1`)!;
+		expect(canonicalOf(target)).toBeNull();
 	});
 });

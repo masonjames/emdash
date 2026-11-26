@@ -5,9 +5,14 @@
  */
 
 import type { APIRoute } from "astro";
+// @ts-ignore - virtual module
+import virtualConfig from "virtual:emdash/config";
 
 import { apiError, handleError } from "#api/error.js";
+import { MediaRepository } from "#db/repositories/media.js";
+import { contentDisposition } from "#media/content-disposition.js";
 import {
+	cacheMediaResponse,
 	IMMUTABLE_IMAGE_CACHE,
 	MUTABLE_MEDIA_CACHE_CONTROL,
 	isNotModified,
@@ -53,6 +58,7 @@ const SAFE_INLINE_TYPES = new Set([
 	"image/gif",
 	"image/webp",
 	"image/avif",
+	"image/bmp",
 	"image/x-icon",
 	"video/mp4",
 	"video/webm",
@@ -80,6 +86,8 @@ export const GET: APIRoute = async ({ params, locals, request, cache }) => {
 		return apiError("NOT_CONFIGURED", "Storage not configured", 500);
 	}
 
+	// An unread download retains its storage connection even for a bodyless response.
+	let unusedBody: ReadableStream<Uint8Array> | undefined;
 	try {
 		// Range requests that include If-Range are served as whole-file responses
 		// because this route does not compare If-Range validators.
@@ -92,12 +100,12 @@ export const GET: APIRoute = async ({ params, locals, request, cache }) => {
 		const result = range
 			? await emdash.storage.download(key, { range })
 			: await emdash.storage.download(key);
+		unusedBody = result.body;
 		const served = range ? result.range : undefined;
 
 		// Adapters return the whole file for a range they don't serve, including
 		// one past the end. A size of 0 may be unknown, so it rules nothing out.
 		if (range && !served && result.size > 0 && !resolveByteRange(range, result.size)) {
-			await result.body.cancel().catch(() => undefined);
 			const response = apiError("RANGE_NOT_SATISFIABLE", "Range not satisfiable", 416);
 			response.headers.set("Content-Range", `bytes */${result.size}`);
 			return response;
@@ -133,24 +141,50 @@ export const GET: APIRoute = async ({ params, locals, request, cache }) => {
 
 		// Safe image/media types can render inline; everything else (SVG, PDF,
 		// HTML, JS, etc.) must be downloaded to prevent stored XSS.
-		if (SAFE_INLINE_TYPES.has(result.contentType)) {
-			headers["Content-Disposition"] = "inline";
-		} else {
-			headers["Content-Disposition"] = "attachment";
+		const disposition = SAFE_INLINE_TYPES.has(result.contentType) ? "inline" : "attachment";
+
+		// Name the download after the uploaded filename. Without this the
+		// browser falls back to the last path segment of the URL -- the storage
+		// key -- and every downloaded document is named after its ULID.
+		// Skipped for inline types, where no filename is shown to anyone.
+		let filename: string | null = null;
+		if (disposition === "attachment") {
+			// A failed lookup must not fail the download: naming the file is a
+			// nicety, and media with no row is served under the bare disposition.
+			try {
+				filename = await new MediaRepository(emdash.db).findFilenameByStorageKey(key);
+			} catch {
+				filename = null;
+			}
 		}
+		headers["Content-Disposition"] = contentDisposition(disposition, filename);
+
+		const body = request.method === "HEAD" ? null : result.body;
 
 		if (served) {
 			const end = served.offset + served.length - 1;
 			headers["Content-Range"] = `bytes ${served.offset}-${end}/${result.size}`;
 			headers["Content-Length"] = String(served.length);
-			return new Response(result.body, { status: 206, headers });
+			const response = new Response(body, { status: 206, headers });
+			if (body) unusedBody = undefined;
+			return response;
 		}
 
 		if (result.size) {
 			headers["Content-Length"] = String(result.size);
 		}
 
-		return new Response(result.body, { status: 200, headers });
+		const response = new Response(body, { status: 200, headers });
+		if (body) unusedBody = undefined;
+		if (
+			virtualConfig?.routeCacheProvider !== "memory" &&
+			!range &&
+			result.contentType.startsWith("image/") &&
+			!request.url.includes("?")
+		) {
+			cacheMediaResponse(cache, key);
+		}
+		return response;
 	} catch (error) {
 		// Check if it's a "not found" error
 		if (
@@ -160,5 +194,7 @@ export const GET: APIRoute = async ({ params, locals, request, cache }) => {
 			return apiError("NOT_FOUND", "File not found", 404);
 		}
 		return handleError(error, "Failed to serve file", "FILE_SERVE_ERROR");
+	} finally {
+		if (unusedBody && !unusedBody.locked) await unusedBody.cancel().catch(() => undefined);
 	}
 };

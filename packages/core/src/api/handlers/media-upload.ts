@@ -39,6 +39,12 @@ export interface MediaUploadInput {
 	maxUploadSize?: number;
 	/** Whether the configured runtime image service accepts HEIC-family input. */
 	heicSupported?: boolean;
+	/**
+	 * Generate blurhash and dominant-color placeholders. Defaults to true.
+	 * Callers running on constrained runtimes can set this to false when LQIP
+	 * is not used, avoiding CPU-intensive image decoding.
+	 */
+	placeholders?: boolean;
 }
 
 export type MediaUploadResult = ApiResult<{
@@ -167,7 +173,9 @@ export async function handleMediaUpload(
 		await storage.upload({ key: storageKey, body: bytes, contentType: mimeType });
 
 		try {
-			const enriched = await enrichImageMetadata(bytes, mimeType);
+			const enriched = await enrichImageMetadata(bytes, mimeType, {
+				placeholders: input.placeholders ?? true,
+			});
 			const item = await repo.create({
 				filename,
 				mimeType,

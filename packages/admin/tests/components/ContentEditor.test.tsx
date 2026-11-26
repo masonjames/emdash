@@ -1,17 +1,34 @@
+import { Toasty } from "@cloudflare/kumo";
 import { i18n } from "@lingui/core";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import * as React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { userEvent, type Locator } from "vitest/browser";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
+import { cdp, page, userEvent, type Locator } from "vitest/browser";
 
+import { AdminDocumentTitle } from "../../src/components/AdminDocumentTitle.js";
 import {
 	ContentEditor,
 	type FieldDescriptor,
 	type ContentEditorProps,
 } from "../../src/components/ContentEditor";
 import { focusDocumentStart } from "../../src/components/editor/BlockCommands";
-import { fetchBylines, fetchReferenceChildren } from "../../src/lib/api";
-import type { BylineSummary, ContentItem } from "../../src/lib/api";
+import { useRevisionViewContext } from "../../src/components/revisions/revision-view-context";
+import {
+	fetchBylines,
+	fetchReferenceChildren,
+	fetchRevisionEditors,
+	fetchRevisions,
+	restoreRevision,
+} from "../../src/lib/api";
+import type {
+	BylineSummary,
+	ContentItem,
+	RevisionListItem,
+	RevisionListResponse,
+} from "../../src/lib/api";
 import { PluginAdminProvider, type PluginAdmins } from "../../src/lib/plugin-context";
+import { diffVersion } from "../../src/lib/revision-diff/index.js";
+import { withAutosavedDraft } from "../../src/lib/revision-list-cache";
 import { render } from "../utils/render.tsx";
 
 function makeByline(overrides: Partial<BylineSummary> = {}): BylineSummary {
@@ -45,7 +62,8 @@ let portableTextMountCount = 0;
 type EditorReadyCall = { mockId: number | null };
 let onEditorReadyCalls: EditorReadyCall[] = [];
 const portableTextProps: { current: Record<string, unknown> | null } = { current: null };
-vi.mock("../../src/components/PortableTextEditor", () => ({
+vi.mock("../../src/components/PortableTextEditor", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../src/components/PortableTextEditor")>()),
 	PortableTextEditor: (props: Record<string, any>) => {
 		const { value, placeholder, onEditorReady } = props;
 		portableTextProps.current = props;
@@ -59,7 +77,7 @@ vi.mock("../../src/components/PortableTextEditor", () => ({
 		React.useEffect(() => {
 			if (onEditorReady) {
 				const id = mountIdRef.current || portableTextMountCount + 1;
-				const stubEditor = { __mockId: id } as unknown;
+				const stubEditor = { __mockId: id, commands: { focus: () => true } } as unknown;
 				onEditorReadyCalls.push({ mockId: id });
 				onEditorReady(stubEditor);
 				return () => {
@@ -87,8 +105,58 @@ vi.mock("../../src/components/editor/BlockCommands", async (importOriginal) => (
 	focusDocumentStart: vi.fn(),
 }));
 
+// Stands in for the version list: a button per version and one for a change, driving the
+// revision view through the same context the real list reads.
+function MockRevisionHistory() {
+	const view = useRevisionViewContext();
+	return (
+		<div data-testid="revision-history">
+			Revision History
+			{view &&
+				["rev-draft", "rev-old"].map((id) => (
+					<button
+						key={id}
+						type="button"
+						aria-current={view.viewingId === id || undefined}
+						onClick={(event) => view.view(id, { opener: event.currentTarget })}
+					>
+						{`View ${id}`}
+					</button>
+				))}
+			{view && (
+				<button type="button" onClick={() => view.goToChange("t1")}>
+					Go to change
+				</button>
+			)}
+			{view && <output aria-label="Versions requested">{view.listLimit}</output>}
+			{view && <output aria-label="Version to focus">{view.rowToFocus?.revisionId}</output>}
+		</div>
+	);
+}
+
 vi.mock("../../src/components/RevisionHistory", () => ({
-	RevisionHistory: () => <div data-testid="revision-history">Revision History</div>,
+	RevisionHistory: () => <MockRevisionHistory />,
+}));
+
+/** A version label the stand-in canvas fails to draw. */
+let unreadableVersion: RegExp | null = null;
+
+vi.mock("../../src/components/revisions/RevisionViewCanvas", () => ({
+	RevisionViewCanvas: ({ label, showChanges }: { label: string; showChanges: boolean }) => {
+		if (unreadableVersion?.test(label)) throw new Error("The version can't be drawn.");
+		return (
+			<article aria-label={label} data-show-changes={String(showChanges)}>
+				<p id="revision-t1" tabIndex={-1}>
+					Changed paragraph
+				</p>
+			</article>
+		);
+	},
+}));
+
+vi.mock("../../src/lib/revision-diff/index.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../src/lib/revision-diff/index.js")>()),
+	diffVersion: vi.fn(() => ({ hasPrevious: true, fields: [], slug: null, changes: [] })),
 }));
 
 vi.mock("../../src/components/TaxonomySidebar", () => ({
@@ -96,19 +164,46 @@ vi.mock("../../src/components/TaxonomySidebar", () => ({
 	useHasApplicableTaxonomies: () => true,
 }));
 
+const mediaPickerProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
+
 vi.mock("../../src/components/MediaPickerModal", () => ({
-	MediaPickerModal: () => null,
+	MediaPickerModal: (props: Record<string, unknown>) => {
+		mediaPickerProps.current = props;
+		return props.open ? <div data-testid="media-picker" /> : null;
+	},
 }));
 
+const outlineClicks = vi.hoisted(() => ({ editorVisible: [] as boolean[] }));
+
 vi.mock("../../src/components/editor/DocumentOutline", () => ({
-	DocumentOutline: () => <div data-testid="doc-outline">Outline</div>,
+	DocumentOutline: () => (
+		<div data-testid="doc-outline">
+			Outline
+			<button
+				type="button"
+				onClick={() =>
+					outlineClicks.editorVisible.push(
+						document.querySelector("[data-testid='portable-text-editor']")?.checkVisibility() ??
+							false,
+					)
+				}
+			>
+				Outline heading
+			</button>
+		</div>
+	),
 }));
 
 vi.mock("@tanstack/react-router", async () => {
 	const actual = await vi.importActual("@tanstack/react-router");
 	return {
 		...actual,
-		Link: ({ children, ...props }: any) => <a {...props}>{children}</a>,
+		Link: ({ children, search, ...props }: any) => (
+			<a {...props} data-search={search ? JSON.stringify(search) : undefined}>
+				{children}
+			</a>
+		),
+		useBlocker: () => ({ status: "idle" }),
 	};
 });
 
@@ -119,6 +214,9 @@ vi.mock("../../src/lib/api", async () => {
 		getPreviewUrl: vi.fn().mockResolvedValue({ url: "https://example.com/preview" }),
 		fetchBylines: vi.fn(async () => ({ items: [], nextCursor: null })),
 		fetchReferenceChildren: vi.fn(async () => ({ children: [] })),
+		fetchRevisionEditors: vi.fn(),
+		fetchRevisions: vi.fn(),
+		restoreRevision: vi.fn(),
 	};
 });
 
@@ -152,6 +250,16 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
 	};
 }
 
+function deferred<T = void>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((promiseResolve, promiseReject) => {
+		resolve = promiseResolve;
+		reject = promiseReject;
+	});
+	return { promise, resolve, reject };
+}
+
 function renderEditor(props: Partial<ContentEditorProps> = {}) {
 	const defaultProps: ContentEditorProps = {
 		collection: "posts",
@@ -161,7 +269,7 @@ function renderEditor(props: Partial<ContentEditorProps> = {}) {
 		onSave: vi.fn(),
 		...props,
 	};
-	return render(<ContentEditor {...defaultProps} />);
+	return render(<ContentEditor {...defaultProps} />, { wrapper: Toasty });
 }
 
 type SavedBylineCredit = NonNullable<ContentItem["bylines"]>[number];
@@ -262,6 +370,64 @@ describe("ContentEditor", () => {
 		portableTextMountCount = 0;
 		onEditorReadyCalls = [];
 		portableTextProps.current = null;
+		mediaPickerProps.current = null;
+	});
+
+	it("passes the database field identity through a block file picker", async () => {
+		const blockType = {
+			id: "attachment-type",
+			slug: "attachment",
+			label: "Attachment",
+			currentVersion: 1,
+			source: "user" as const,
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			versions: [
+				{
+					id: "attachment-v1",
+					blockTypeId: "attachment-type",
+					version: 1,
+					fields: [
+						{
+							slug: "file",
+							label: "File",
+							type: "file",
+							validation: { allowedMimeTypes: ["application/msword"] },
+						},
+					],
+					fingerprint: "attachment-v1",
+					active: true,
+					createdAt: "2026-01-01T00:00:00.000Z",
+					updatedAt: "2026-01-01T00:00:00.000Z",
+				},
+			],
+		};
+		const screen = await renderEditor({
+			isNew: false,
+			item: makeItem({
+				data: {
+					attachments: [{ _type: "attachment", _version: 1, _key: "block-key" }],
+				},
+			}),
+			fields: {
+				attachments: {
+					id: "database-field",
+					kind: "blocks",
+					label: "Attachments",
+					validation: { allowedTypes: ["attachment"] },
+					blockTypes: [blockType],
+				},
+			},
+		});
+
+		await screen.getByRole("button", { name: "Attachment", exact: true }).click();
+		await screen.getByRole("button", { name: "Select File" }).click();
+		expect(mediaPickerProps.current).toMatchObject({
+			fieldId: "database-field:block-key:file",
+			blockType: "attachment",
+			blockVersion: 1,
+			mimeTypeFilters: ["application/msword"],
+		});
 	});
 
 	it("uses a task-oriented placeholder for portable text fields", async () => {
@@ -316,6 +482,76 @@ describe("ContentEditor", () => {
 		}
 	});
 
+	it("saves nothing while its fields wait for the entry's content", async () => {
+		vi.useFakeTimers();
+		try {
+			const onSave = vi.fn();
+			const onAutosave = vi.fn();
+			const props: ContentEditorProps = {
+				collection: "posts",
+				collectionLabel: "Post",
+				fields: { title: { kind: "string", label: "Title" } },
+				isNew: false,
+				item: makeItem({ data: { title: "My Post" } }),
+				onSave,
+				onAutosave,
+			};
+			const screen = await render(<ContentEditor {...props} />, { wrapper: Toasty });
+
+			await screen.getByLabelText("Title").fill("Changed title");
+			// A tab that left its room waits for the entry's current content, so its form is stale.
+			await screen.rerender(<ContentEditor {...props} fieldsLoading />);
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(onAutosave).not.toHaveBeenCalled();
+			await expect.element(screen.getByRole("button", { name: "Save" }).first()).toBeDisabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("doesn't publish the form while its fields wait for the entry's content", async () => {
+		const onPublish = vi.fn();
+		const props: ContentEditorProps = {
+			collection: "posts",
+			collectionLabel: "Post",
+			fields: { title: { kind: "string", label: "Title" } },
+			isNew: false,
+			item: makeItem({ status: "draft", data: { title: "My Post" } }),
+			onSave: vi.fn(),
+			onPublish,
+		};
+		const screen = await render(<ContentEditor {...props} />, { wrapper: Toasty });
+		await screen.getByRole("button", { name: "Publish now", exact: true }).click();
+		const dialog = screen.getByRole("dialog", { name: "Publish now?" });
+		await expect.element(dialog).toBeVisible();
+
+		await screen.rerender(<ContentEditor {...props} fieldsLoading />);
+		dialog.getByRole("button", { name: "Publish now", exact: true }).element().click();
+		expect(onPublish).not.toHaveBeenCalled();
+	});
+
+	it("doesn't schedule the form while its fields wait for the entry's content", async () => {
+		const onSchedule = vi.fn().mockResolvedValue(undefined);
+		const props: ContentEditorProps = {
+			collection: "posts",
+			collectionLabel: "Post",
+			fields: { title: { kind: "string", label: "Title" } },
+			isNew: false,
+			item: makeItem({ status: "draft", data: { title: "My Post" } }),
+			onSave: vi.fn(),
+			onSchedule,
+		};
+		const screen = await render(<ContentEditor {...props} />, { wrapper: Toasty });
+		await screen.getByRole("button", { name: "Schedule" }).click();
+		const dialog = screen.getByRole("dialog", { name: "Schedule publication" });
+		await expect.element(dialog).toBeVisible();
+
+		await screen.rerender(<ContentEditor {...props} fieldsLoading />);
+		dialog.getByRole("button", { name: "Schedule", exact: true }).element().click();
+		await expect.element(screen.getByText("This entry is still loading.")).toBeVisible();
+		expect(onSchedule).not.toHaveBeenCalled();
+	});
+
 	it("makes an entry read-only when its schema contains an unsupported field type", async () => {
 		vi.useFakeTimers();
 		try {
@@ -339,7 +575,9 @@ describe("ContentEditor", () => {
 			await expect.element(screen.getByRole("alert")).toHaveTextContent("future_blocks");
 			await expect.element(screen.getByLabelText("Title")).toBeDisabled();
 			expect(screen.getByLabelText("Layout").query()).toBeNull();
-			await expect.element(screen.getByRole("button", { name: "Save" }).first()).toBeDisabled();
+			await expect
+				.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+				.toBeNull();
 
 			await vi.advanceTimersByTimeAsync(2500);
 			expect(onAutosave).not.toHaveBeenCalled();
@@ -394,9 +632,9 @@ describe("ContentEditor", () => {
 		await userEvent.hover(helpTrigger.element());
 		await expect
 			.element(
-				screen.getByText(
-					"Used as the main visual for this post on listing pages and at the top of the post",
-				),
+				screen.getByRole("tooltip", {
+					name: "Used as the main visual for this post on listing pages and at the top of the post",
+				}),
 			)
 			.toBeVisible();
 	});
@@ -462,35 +700,30 @@ describe("ContentEditor", () => {
 		// Kumo's focusout dismissal when the focused settings content is swapped
 		// out — pinning that would test Kumo internals, not the sync.
 
-		it("keeps the sheet closed for block panels in distraction-free mode", async () => {
-			// The sheet's nav is hidden in DF, but Kumo's mobile backdrop is a
-			// separate sibling: letting the sheet open would paint a full-screen
-			// scrim over the writing surface with nothing visible to dismiss.
-			const media = installMatchMedia(true);
-			try {
-				const screen = await renderEditor({ isNew: false, item: makeItem(), fields: ptFields });
-				await expect.element(screen.getByTestId("portable-text-editor")).toBeInTheDocument();
+		it("closes the block panel when a read replaces the body", async () => {
+			const props: ContentEditorProps = {
+				collection: "posts",
+				collectionLabel: "Post",
+				fields: ptFields,
+				isNew: false,
+				onSave: vi.fn(),
+			};
+			const body = (text: string) => [
+				{ _type: "block", _key: "b1", children: [{ _type: "span", _key: "s1", text }] },
+			];
+			const screen = await render(
+				<ContentEditor {...props} item={makeItem({ data: { content: body("Old body") } })} />,
+			);
+			getPanelHooks().open(makeBlockPanel());
+			await expect.element(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
 
-				await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-				const { open } = getPanelHooks();
-				open(makeBlockPanel());
-
-				// Sheet must not open (no nav, and the backdrop must not be scrimming).
-				await expect
-					.element(screen.getByRole("navigation", { name: "Settings" }), { timeout: 200 })
-					.not.toBeInTheDocument();
-				const backdrop = document.querySelector("[data-sidebar-backdrop]");
-				expect(backdrop?.classList.contains("pointer-events-none") ?? true).toBe(true);
-
-				// Exiting DF with the panel still active surfaces it in the sheet.
-				await screen.getByRole("button", { name: "Exit distraction-free mode" }).click();
-				await expect
-					.element(screen.getByRole("navigation", { name: "Settings" }))
-					.toBeInTheDocument();
-				await expect.element(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
-			} finally {
-				media.restore();
-			}
+			await screen.rerender(
+				<ContentEditor {...props} item={makeItem({ data: { content: body("Newer body") } })} />,
+			);
+			await expect
+				.element(screen.getByTestId("portable-text-editor"))
+				.toHaveAttribute("data-content", "Newer body");
+			await expect.element(screen.getByRole("button", { name: "Remove" })).not.toBeInTheDocument();
 		});
 
 		it("closes the sheet but keeps the block panel when crossing to desktop", async () => {
@@ -518,6 +751,102 @@ describe("ContentEditor", () => {
 		});
 	});
 
+	describe("customize sidebar link", () => {
+		function customizeLink() {
+			const link = [...document.querySelectorAll("a")].find(
+				(anchor) => anchor.textContent === "Customize sidebar",
+			);
+			expect(link).toBeDefined();
+			return link!;
+		}
+
+		it("links to the Editor tab of Settings → Sidebars after the last section", async () => {
+			await renderEditor({ isNew: false, item: makeItem() });
+
+			const link = customizeLink();
+			expect(link.getAttribute("to")).toBe("/settings/sidebars");
+			expect(JSON.parse(link.dataset.search ?? "null")).toEqual({ tab: "editor" });
+			const lastSection = [...document.querySelectorAll("[data-settings-section]")].at(-1);
+			expect(lastSection).toBeDefined();
+			expect(
+				lastSection!.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING,
+			).toBeTruthy();
+			expect(link.closest('[data-sidebar="footer"]')).toBeNull();
+		});
+
+		it("stays outside the read-only lock", async () => {
+			const screen = await renderEditor({ isNew: false, item: makeItem(), readOnly: true });
+
+			await expect.element(screen.getByLabelText("Slug")).toBeDisabled();
+			expect(customizeLink().closest("fieldset:disabled")).toBeNull();
+		});
+
+		it("is not shown while a block panel replaces the sections", async () => {
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem(),
+				fields: { content: { kind: "portableText", label: "Content" } },
+			});
+			await expect.element(screen.getByTestId("portable-text-editor")).toBeInTheDocument();
+			customizeLink();
+
+			const open = portableTextProps.current?.onBlockSidebarOpen as (panel: unknown) => void;
+			open({
+				type: "image",
+				attrs: { src: "https://example.com/image.png", alt: "Example" },
+				onUpdate: vi.fn(),
+				onReplace: vi.fn(),
+				onDelete: vi.fn(),
+				onClose: vi.fn(),
+			});
+
+			await expect.element(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+			expect(screen.getByText("Customize sidebar").query()).toBeNull();
+		});
+	});
+
+	it("uses a custom collection's title field and singular label in the browser tab", async () => {
+		const screen = await render(
+			<AdminDocumentTitle siteName="My Site" pageKey="/content/people/1" pageTitle="People">
+				<ContentEditor
+					collection="people"
+					collectionLabel="Person"
+					fields={{
+						name: { kind: "string", label: "Name" },
+						title: { kind: "string", label: "Job title" },
+					}}
+					item={makeItem({ data: { name: "Jane Smith", title: "Trustee" } })}
+					isNew={false}
+					onSave={vi.fn()}
+					manifest={{
+						version: "1",
+						hash: "hash",
+						authMode: "passkey",
+						collections: {
+							people: {
+								label: "People",
+								labelSingular: "Person",
+								supports: [],
+								hasSeo: false,
+								titleField: "name",
+							},
+						},
+						plugins: {},
+						taxonomies: [],
+					}}
+				/>
+			</AdminDocumentTitle>,
+			{ wrapper: Toasty },
+		);
+		await expect.poll(() => document.title).toBe("Edit Person: Jane Smith · My Site");
+		await screen.getByLabelText("Name").fill("Jane Doe");
+		await expect.poll(() => document.title).toBe("Edit Person: Jane Doe · My Site");
+		await screen.getByLabelText("Name").fill("");
+		await expect.poll(() => document.title).toBe("Edit Person: Trustee · My Site");
+		await screen.getByLabelText("Job title").fill("");
+		await expect.poll(() => document.title).toBe("Edit Person: my-post · My Site");
+	});
+
 	describe("slug generation", () => {
 		it("auto-generates slug from title for new items", async () => {
 			const screen = await renderEditor({ isNew: true });
@@ -526,6 +855,53 @@ describe("ContentEditor", () => {
 
 			const slugInput = screen.getByLabelText("Slug");
 			await expect.element(slugInput).toHaveValue("hello-world-post");
+		});
+
+		it("auto-generates the slug from the collection's title field, not a field named title", async () => {
+			const screen = await renderEditor({
+				isNew: true,
+				fields: {
+					name: { kind: "string", label: "Name" },
+					title: { kind: "string", label: "Job title" },
+				},
+				manifest: {
+					version: "1.0.0",
+					hash: "hash",
+					authMode: "passkey",
+					collections: {
+						posts: {
+							label: "Posts",
+							labelSingular: "Post",
+							supports: [],
+							hasSeo: false,
+							titleField: "name",
+						},
+					},
+					plugins: {},
+					taxonomies: [],
+				},
+			});
+			const slugInput = screen.getByLabelText("Slug");
+
+			await screen.getByLabelText("Job title").fill("Trustee");
+			await expect.element(slugInput).toHaveValue("");
+
+			await screen.getByLabelText("Name").fill("Jane Smith");
+			await expect.element(slugInput).toHaveValue("jane-smith");
+
+			await screen.getByLabelText("Job title").fill("Mayor");
+			await expect.element(slugInput).toHaveValue("jane-smith");
+		});
+
+		it("auto-generates the slug from a multiline title when the collection sets no title field", async () => {
+			const screen = await renderEditor({
+				isNew: true,
+				fields: { title: { kind: "richText", label: "Title" } },
+			});
+
+			await screen.getByLabelText("Title").fill("Hello World");
+
+			await expect.element(screen.getByLabelText("Slug")).toHaveValue("hello-world");
 		});
 
 		it("slug accepts manual override", async () => {
@@ -712,6 +1088,154 @@ describe("ContentEditor", () => {
 				expect(onSave).not.toHaveBeenCalled();
 			},
 		);
+
+		it("saves a cleared number field as null", async () => {
+			const onSave = vi.fn();
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({ data: { title: "Test", price: 5 } }),
+				onSave,
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					price: { kind: "number", label: "Price" },
+				},
+			});
+
+			await screen.getByLabelText("Price", { exact: true }).clear();
+			await screen.getByRole("button", { name: "Save" }).first().click();
+
+			await vi.waitFor(() =>
+				expect(onSave).toHaveBeenCalledWith(
+					expect.objectContaining({
+						data: expect.objectContaining({ price: null }),
+					}),
+				),
+			);
+		});
+
+		it("saves a cleared URL field as null", async () => {
+			const onSave = vi.fn();
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({ data: { title: "Test", website: "https://example.com" } }),
+				onSave,
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					website: { kind: "url", label: "Website" },
+				},
+			});
+
+			await screen.getByLabelText("Website", { exact: true }).clear();
+			await screen.getByRole("button", { name: "Save" }).first().click();
+
+			await vi.waitFor(() =>
+				expect(onSave).toHaveBeenCalledWith(
+					expect.objectContaining({
+						data: expect.objectContaining({ website: null }),
+					}),
+				),
+			);
+		});
+
+		it("accepts and saves a decimal in a number field", async () => {
+			const onSave = vi.fn();
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({ data: { title: "Test" } }),
+				onSave,
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					price: { kind: "number", label: "Price" },
+				},
+			});
+
+			const input = screen.getByLabelText("Price", { exact: true });
+			await input.fill("4.50");
+			await expect.element(input).toBeValid();
+			await screen.getByRole("button", { name: "Save" }).first().click();
+
+			await vi.waitFor(() =>
+				expect(onSave).toHaveBeenCalledWith(
+					expect.objectContaining({
+						data: expect.objectContaining({ price: 4.5 }),
+					}),
+				),
+			);
+		});
+
+		it("rejects a decimal in an integer field", async () => {
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({ data: { title: "Test" } }),
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					seats: { kind: "number", label: "Seats", integer: true },
+				},
+			});
+
+			const input = screen.getByLabelText("Seats", { exact: true });
+			await input.fill("44.5");
+			await expect.element(input).not.toBeValid();
+			await input.fill("44");
+			await expect.element(input).toBeValid();
+		});
+
+		it("rejects a decimal in an integer field inside a block", async () => {
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({
+					data: {
+						title: "Test",
+						layout: [{ _type: "event", _version: 1, _key: "first", seats: 40, price: 4 }],
+					},
+				}),
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					layout: {
+						kind: "blocks",
+						label: "Layout",
+						validation: { allowedTypes: ["event"], retiredTypes: [] },
+						blockTypes: [
+							{
+								id: "event-type",
+								slug: "event",
+								label: "Event",
+								currentVersion: 1,
+								source: "user",
+								createdAt: "2026-01-01T00:00:00.000Z",
+								updatedAt: "2026-01-01T00:00:00.000Z",
+								versions: [
+									{
+										id: "event-v1",
+										blockTypeId: "event-type",
+										version: 1,
+										fields: [
+											{ slug: "seats", label: "Seats", type: "integer" },
+											{ slug: "price", label: "Price", type: "number" },
+										],
+										fingerprint: "one",
+										active: true,
+										createdAt: "2026-01-01T00:00:00.000Z",
+										updatedAt: "2026-01-01T00:00:00.000Z",
+									},
+								],
+							},
+						],
+					},
+				},
+			});
+
+			await screen.getByRole("button", { name: "Event", exact: true }).click();
+			const seats = screen.getByLabelText("Seats", { exact: true });
+			await seats.fill("44.5");
+			await expect.element(seats).not.toBeValid();
+			await seats.fill("44");
+			await expect.element(seats).toBeValid();
+
+			const price = screen.getByLabelText("Price", { exact: true });
+			await price.fill("4.50");
+			await expect.element(price).toBeValid();
+		});
 
 		it("keeps URL values left-to-right inside an RTL editor", async () => {
 			document.documentElement.dir = "rtl";
@@ -1132,6 +1656,44 @@ describe("ContentEditor", () => {
 			);
 		});
 
+		it("saves null when an optional datetime field is cleared", async () => {
+			const onSave = vi.fn();
+			const screen = await renderEditor({
+				isNew: false,
+				onSave,
+				item: makeItem({ data: { title: "Recall", recall_date: "2026-02-26T09:30:00.000Z" } }),
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					recall_date: { kind: "datetime", label: "Recall date" },
+				},
+			});
+
+			await screen.getByLabelText("Recall date").fill("");
+			await screen.getByRole("button", { name: "Save" }).first().click();
+
+			expect(onSave).toHaveBeenCalledWith(
+				expect.objectContaining({ data: expect.objectContaining({ recall_date: null }) }),
+			);
+		});
+
+		it("does not save when a required datetime field is cleared", async () => {
+			const onSave = vi.fn();
+			const screen = await renderEditor({
+				isNew: false,
+				onSave,
+				item: makeItem({ data: { title: "Recall", recall_date: "2026-02-26T09:30:00.000Z" } }),
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					recall_date: { kind: "datetime", label: "Recall date", required: true },
+				},
+			});
+
+			await screen.getByLabelText("Recall date").fill("");
+			await screen.getByRole("button", { name: "Save" }).first().click();
+
+			expect(onSave).not.toHaveBeenCalled();
+		});
+
 		it("renders json fields as a textarea", async () => {
 			const screen = await renderEditor({
 				fields: { metadata: { kind: "json", label: "Metadata" } },
@@ -1151,6 +1713,17 @@ describe("ContentEditor", () => {
 			});
 			const textarea = screen.getByLabelText("Metadata");
 			await expect.element(textarea).toHaveValue(JSON.stringify(jsonData, null, 2));
+		});
+
+		it("sizes text field textareas from the rows option", async () => {
+			const screen = await renderEditor({
+				fields: {
+					excerpt: { kind: "richText", label: "Excerpt", options: { rows: 4 } },
+					notes: { kind: "richText", label: "Notes" },
+				},
+			});
+			await expect.element(screen.getByLabelText("Excerpt")).toHaveAttribute("rows", "4");
+			await expect.element(screen.getByLabelText("Notes")).toHaveAttribute("rows", "10");
 		});
 	});
 
@@ -1241,7 +1814,9 @@ describe("ContentEditor", () => {
 			await expect.element(screen.getByLabelText("Order", { exact: true })).toHaveValue(0);
 			await expect.element(screen.getByLabelText("Subtitle")).toHaveValue("");
 			await expect.element(screen.getByLabelText("Tagline")).toHaveValue("");
-			await expect.element(screen.getByRole("button", { name: "Saved" }).first()).toBeDisabled();
+			await expect
+				.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+				.toBeNull();
 		});
 
 		it("leaves the defaults out of an edit form whose entry did not load", async () => {
@@ -1252,7 +1827,9 @@ describe("ContentEditor", () => {
 			});
 
 			await expect.element(screen.getByRole("switch")).not.toBeChecked();
-			await expect.element(screen.getByRole("button", { name: "Saved" }).first()).toBeDisabled();
+			await expect
+				.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+				.toBeNull();
 		});
 	});
 
@@ -1407,12 +1984,12 @@ describe("ContentEditor", () => {
 			await expect.element(saveBtn).toBeEnabled();
 		});
 
-		it("SaveButton is disabled for existing item with no changes", async () => {
+		it("hides the save control for an existing item with no changes", async () => {
 			const item = makeItem();
 			const screen = await renderEditor({ isNew: false, item });
-			const saveBtn = screen.getByRole("button", { name: "Saved" }).first();
-			await expect.element(saveBtn).toBeDisabled();
-			expect(saveBtn.getByRole("status").element().textContent).toBe("Saved");
+			await expect
+				.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+				.toBeNull();
 		});
 
 		// Strict per-locale hydration (migration 040) can return
@@ -1757,7 +2334,7 @@ describe("ContentEditor", () => {
 					await expect
 						.element(screen.getByRole("separator", { name: "Settings" }))
 						.not.toBeInTheDocument();
-					await screen.getByRole("button", { name: "Settings" }).click();
+					await screen.getByRole("button", { name: "Show settings", exact: true }).click();
 					await expect
 						.element(screen.getByRole("navigation", { name: "Settings" }))
 						.toBeInTheDocument();
@@ -1773,6 +2350,295 @@ describe("ContentEditor", () => {
 			});
 		});
 
+		describe("settings panel toggle", () => {
+			const STORAGE_KEY = "emdash-editor-settings-panel";
+			const ptFields: Record<string, FieldDescriptor> = {
+				title: { kind: "string", label: "Title" },
+				content: { kind: "portableText", label: "Content" },
+			};
+
+			beforeEach(() => {
+				localStorage.removeItem(STORAGE_KEY);
+			});
+			afterEach(() => {
+				localStorage.removeItem(STORAGE_KEY);
+			});
+
+			function getPanel(screen: Awaited<ReturnType<typeof renderEditor>>) {
+				return screen.getByRole("complementary", { name: "Settings", includeHidden: true });
+			}
+
+			function makeBlockPanel() {
+				return {
+					type: "image",
+					attrs: { src: "https://example.com/image.png", alt: "Example" },
+					onUpdate: vi.fn(),
+					onReplace: vi.fn(),
+					onDelete: vi.fn(),
+					onClose: vi.fn(),
+				};
+			}
+
+			function getPanelHooks() {
+				const open = portableTextProps.current?.onBlockSidebarOpen as (panel: unknown) => void;
+				const close = portableTextProps.current?.onBlockSidebarClose as () => void;
+				expect(typeof open).toBe("function");
+				expect(typeof close).toBe("function");
+				return { open, close };
+			}
+
+			it("keeps a settings link pending when its control cannot take focus", async () => {
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const onFieldFocused = vi.fn();
+				const screen = await renderEditor({
+					isNew: false,
+					item: makeItem(),
+					readOnly: true,
+					focusField: "slug",
+					onFieldFocused,
+				});
+				const panel = getPanel(screen).element();
+				await expect.poll(() => panel.getBoundingClientRect().width).toBeCloseTo(368);
+				await new Promise(requestAnimationFrame);
+				await new Promise(requestAnimationFrame);
+				await expect.element(screen.getByLabelText("Slug")).toBeDisabled();
+				expect(document.activeElement).not.toBe(screen.getByLabelText("Slug").element());
+				expect(onFieldFocused).not.toHaveBeenCalled();
+				await screen.rerender(
+					<ContentEditor
+						collection="posts"
+						collectionLabel="Post"
+						fields={defaultFields}
+						isNew={false}
+						item={makeItem()}
+						focusField="slug"
+						onFieldFocused={onFieldFocused}
+					/>,
+				);
+				await new Promise(requestAnimationFrame);
+				await new Promise(requestAnimationFrame);
+				expect(document.activeElement).not.toBe(screen.getByLabelText("Slug").element());
+				expect(onFieldFocused).not.toHaveBeenCalled();
+			});
+
+			it("hides and shows the panel without unmounting it", async () => {
+				const screen = await renderEditor({ isNew: false, item: makeItem() });
+				const slug = screen.getByLabelText("Slug");
+				await slug.fill("kept-slug");
+				const slugInput = slug.element();
+				const panel = getPanel(screen).element();
+
+				await screen.getByRole("button", { name: "Hide settings" }).click();
+				expect(panel).toHaveAttribute("inert");
+				await vi.waitFor(() => expect(panel.getBoundingClientRect().width).toBe(0));
+
+				await screen.getByRole("button", { name: "Show settings" }).click();
+				expect(panel).not.toHaveAttribute("inert");
+				await vi.waitFor(() => expect(panel.getBoundingClientRect().width).toBeCloseTo(368));
+				expect(screen.getByLabelText("Slug").element()).toBe(slugInput);
+				await expect.element(screen.getByLabelText("Slug")).toHaveValue("kept-slug");
+			});
+
+			it("moves focus to the toggle when hiding from inside the panel", async () => {
+				const screen = await renderEditor({ isNew: false, item: makeItem() });
+				screen.getByLabelText("Slug").element().focus();
+				const toggle = screen.getByRole("button", { name: "Hide settings" }).element();
+
+				// A scripted click doesn't move focus, like a click in Safari.
+				(toggle as HTMLButtonElement).click();
+				await vi.waitFor(() => expect(getPanel(screen).element()).toHaveAttribute("inert"));
+				expect(document.activeElement).toBe(toggle);
+			});
+
+			it("keeps the closed phone sheet inert after hiding the panel on desktop", async () => {
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const media = installMatchMedia(false);
+				try {
+					const screen = await renderEditor({ isNew: false, item: makeItem() });
+					expect(getPanel(screen).element()).toHaveAttribute("inert");
+
+					await media.setMatchesSequentially(true);
+					const sheet = screen.getByRole("navigation", { name: "Settings", includeHidden: true });
+					await vi.waitFor(() => expect(sheet.element()).toHaveAttribute("inert"));
+
+					await screen.getByRole("button", { name: "Show settings", exact: true }).click();
+					await vi.waitFor(() => expect(sheet.element()).not.toHaveAttribute("inert"));
+					await screen.getByRole("button", { name: "Close settings" }).click();
+					await vi.waitFor(() => expect(sheet.element()).toHaveAttribute("inert"));
+				} finally {
+					media.restore();
+				}
+			});
+
+			it("remembers the choice in this browser", async () => {
+				const first = await renderEditor({ isNew: false, item: makeItem() });
+				await first.getByRole("button", { name: "Hide settings" }).click();
+				expect(localStorage.getItem(STORAGE_KEY)).toBe("hidden");
+				await first.unmount();
+
+				const second = await renderEditor({ isNew: false, item: makeItem() });
+				const panel = getPanel(second).element();
+				expect(panel).toHaveAttribute("inert");
+				expect(panel.getBoundingClientRect().width).toBe(0);
+				await expect
+					.element(second.getByRole("button", { name: "Show settings" }))
+					.toBeInTheDocument();
+			});
+
+			it("opens for an unrecognized stored value", async () => {
+				localStorage.setItem(STORAGE_KEY, "banana");
+				const screen = await renderEditor({ isNew: false, item: makeItem() });
+				expect(getPanel(screen).element()).not.toHaveAttribute("inert");
+				await expect
+					.element(screen.getByRole("button", { name: "Hide settings" }))
+					.toBeInTheDocument();
+			});
+
+			it("closes an image panel when the panel is hidden", async () => {
+				const screen = await renderEditor({ isNew: false, item: makeItem(), fields: ptFields });
+				await expect.element(screen.getByTestId("portable-text-editor")).toBeInTheDocument();
+				const blockPanel = makeBlockPanel();
+				getPanelHooks().open(blockPanel);
+				await expect.element(screen.getByRole("textbox", { name: "Alt text" })).toBeVisible();
+
+				await screen.getByRole("button", { name: "Hide settings" }).click();
+				expect(getPanel(screen).element()).toHaveAttribute("inert");
+				expect(blockPanel.onClose).toHaveBeenCalled();
+
+				await screen.getByRole("button", { name: "Show settings" }).click();
+				await expect.element(screen.getByLabelText("Slug")).toBeVisible();
+				expect(
+					screen.getByRole("textbox", { name: "Alt text", includeHidden: true }).query(),
+				).toBeNull();
+			});
+
+			it("shows a hidden panel for a block panel, then hides it again", async () => {
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const screen = await renderEditor({ isNew: false, item: makeItem(), fields: ptFields });
+				await expect.element(screen.getByTestId("portable-text-editor")).toBeInTheDocument();
+				const panel = getPanel(screen).element();
+				expect(panel).toHaveAttribute("inert");
+
+				const { open, close } = getPanelHooks();
+				open(makeBlockPanel());
+				await expect.element(screen.getByText("Image settings")).toBeVisible();
+				expect(panel).not.toHaveAttribute("inert");
+				expect(localStorage.getItem(STORAGE_KEY)).toBe("hidden");
+
+				close();
+				await vi.waitFor(() => expect(panel).toHaveAttribute("inert"));
+				expect(localStorage.getItem(STORAGE_KEY)).toBe("hidden");
+			});
+
+			it.each([
+				["after the panel slides open", false],
+				["under reduced motion", true],
+			])("opens a hidden panel to report its invalid control on Save %s", async (_, reduced) => {
+				if (reduced) {
+					await cdp().send("Emulation.setEmulatedMedia", {
+						features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+					});
+					onTestFinished(() => cdp().send("Emulation.setEmulatedMedia", { features: [] }));
+				}
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const onSave = vi.fn();
+				const pluginAdmins: PluginAdmins = {
+					ratings: {
+						contentEditorPanels: [
+							{
+								id: "rating",
+								title: "Rating",
+								component: () => (
+									<input type="number" min={1} max={10} defaultValue={50} aria-label="Rating" />
+								),
+							},
+						],
+					},
+				};
+				const screen = await render(
+					<PluginAdminProvider pluginAdmins={pluginAdmins}>
+						<ContentEditor
+							collection="posts"
+							collectionLabel="Post"
+							fields={defaultFields}
+							isNew={false}
+							item={makeItem()}
+							currentUser={{ id: "u-1", role: 50 }}
+							onSave={onSave}
+						/>
+					</PluginAdminProvider>,
+					{ wrapper: Toasty },
+				);
+				const rating = screen.getByRole("spinbutton", { name: "Rating", includeHidden: true });
+				await expect.element(rating).toBeInTheDocument();
+				const panel = getPanel(screen).element();
+				expect(panel).toHaveAttribute("inert");
+
+				await screen.getByLabelText("Title").fill("Changed");
+				await screen.getByRole("button", { name: "Save" }).first().click();
+
+				await vi.waitFor(() => expect(document.activeElement).toBe(rating.element()));
+				expect(onSave).not.toHaveBeenCalled();
+				expect(panel).not.toHaveAttribute("inert");
+				await expect
+					.element(screen.getByRole("button", { name: "Hide settings" }))
+					.toBeInTheDocument();
+				expect(localStorage.getItem(STORAGE_KEY)).toBe("hidden");
+
+				await new Promise((resolve) => setTimeout(resolve, 400));
+				expect(document.activeElement).toBe(rating.element());
+				expect(panel).not.toHaveAttribute("inert");
+			});
+
+			it("leaves a hidden panel closed when the invalid control is in the canvas", async () => {
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const onSave = vi.fn();
+				const screen = await renderEditor({
+					isNew: false,
+					item: makeItem({ data: { title: "My Post", rating: 50 } }),
+					fields: {
+						title: { kind: "string", label: "Title" },
+						rating: { kind: "number", label: "Rating", validation: { min: 1, max: 10 } },
+					},
+					onSave,
+				});
+				await screen.getByLabelText("Title").fill("Changed");
+				await screen.getByRole("button", { name: "Save" }).first().click();
+
+				const rating = screen.getByLabelText("Rating", { exact: true }).element();
+				await vi.waitFor(() => expect(document.activeElement).toBe(rating));
+				expect(onSave).not.toHaveBeenCalled();
+				expect(getPanel(screen).element()).toHaveAttribute("inert");
+			});
+
+			it("shows a hidden panel on a read-only entry", async () => {
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const screen = await renderEditor({ isNew: false, item: makeItem(), readOnly: true });
+				const panel = getPanel(screen).element();
+				expect(panel).toHaveAttribute("inert");
+
+				await screen.getByRole("button", { name: "Show settings" }).click();
+				expect(panel).not.toHaveAttribute("inert");
+			});
+
+			it("ignores the stored choice below lg", async () => {
+				localStorage.setItem(STORAGE_KEY, "hidden");
+				const media = installMatchMedia(true);
+				try {
+					const screen = await renderEditor({ isNew: false, item: makeItem() });
+					await screen.getByRole("button", { name: "Show settings" }).click();
+					await expect
+						.element(screen.getByRole("navigation", { name: "Settings" }))
+						.toBeInTheDocument();
+					expect(screen.getByRole("button", { name: /^(Hide|Show) settings$/ }).all()).toHaveLength(
+						1,
+					);
+				} finally {
+					media.restore();
+				}
+			});
+		});
+
 		it("uses the elevated surface for the full-bleed canvas and settings panel", async () => {
 			await renderEditor({ isNew: false, item: makeItem() });
 			const form = document.querySelector("form");
@@ -1781,6 +2647,40 @@ describe("ContentEditor", () => {
 			expect(form).toHaveClass("bg-kumo-elevated");
 			expect(form).not.toHaveClass("bg-kumo-base");
 			expect(provider?.style.getPropertyValue("--sidebar-bg")).toBe("var(--color-kumo-elevated)");
+		});
+
+		it("offers Save draft before the first save and Publish now after it", async () => {
+			const onPublish = vi.fn();
+			const screen = await renderEditor({ isNew: true, supportsDrafts: true, onPublish });
+
+			await expect.element(screen.getByRole("button", { name: "Save draft" })).toBeInTheDocument();
+			await expect
+				.element(
+					screen.getByText("Saving creates a draft that stays off the site.", { exact: false }),
+				)
+				.toBeVisible();
+			expect(screen.getByRole("button", { name: "Publish now", exact: true }).query()).toBeNull();
+
+			await screen.rerender(
+				<ContentEditor
+					collection="posts"
+					collectionLabel="Post"
+					fields={defaultFields}
+					isNew={false}
+					supportsDrafts
+					item={makeItem({ status: "draft" })}
+					onSave={vi.fn()}
+					onPublish={onPublish}
+				/>,
+			);
+
+			await expect
+				.element(screen.getByRole("button", { name: "Publish now", exact: true }))
+				.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Save draft" }).query()).toBeNull();
+			await expect
+				.element(screen.getByText("This version is not visible on the site"))
+				.toBeVisible();
 		});
 
 		it("shows Publish now for draft items", async () => {
@@ -1806,11 +2706,87 @@ describe("ContentEditor", () => {
 			expect(onPublish).toHaveBeenCalledOnce();
 		});
 
+		it.each([
+			{
+				name: "Publish now",
+				item: makeItem({ status: "draft" }),
+				props: {},
+				settlement: "resolve" as const,
+			},
+			{
+				name: "Publish now",
+				item: makeItem({ status: "draft" }),
+				props: {},
+				settlement: "reject" as const,
+			},
+			{
+				name: "Publish changes",
+				item: makeItem({
+					status: "published",
+					liveRevisionId: "rev-live",
+					draftRevisionId: "rev-draft",
+				}),
+				props: { supportsDrafts: true },
+				settlement: "resolve" as const,
+			},
+			{
+				name: "Publish changes",
+				item: makeItem({
+					status: "published",
+					liveRevisionId: "rev-live",
+					draftRevisionId: "rev-draft",
+				}),
+				props: { supportsDrafts: true },
+				settlement: "reject" as const,
+			},
+		])(
+			"disables $name while the publish request is in flight and re-enables after it $settlement",
+			async ({ name, item, props, settlement }) => {
+				const pending = deferred();
+				const onPublish = vi.fn(() => pending.promise);
+				const screen = await renderEditor({ isNew: false, item, onPublish, ...props });
+				const publish = screen.getByRole("button", { name, exact: true });
+
+				await publish.click();
+				const dialogName = name === "Publish changes" ? "Publish changes?" : "Publish now?";
+				screen
+					.getByRole("dialog", { name: dialogName })
+					.getByRole("button", { name, exact: true })
+					.element()
+					.click();
+				await vi.waitFor(() => expect(onPublish).toHaveBeenCalledOnce());
+				await expect.element(publish).toBeDisabled();
+
+				if (settlement === "resolve") pending.resolve();
+				else pending.reject(new Error("publish failed"));
+				await expect.element(publish).not.toBeDisabled();
+			},
+		);
+
 		it("shows Preview in normal mode when previews are supported", async () => {
 			const item = makeItem({ status: "draft" });
 			const screen = await renderEditor({ isNew: false, item, supportsPreview: true });
 			const previewBtn = screen.getByRole("button", { name: "Preview" });
 			await expect.element(previewBtn).toBeInTheDocument();
+		});
+
+		it("Preview opens the entry's own tab, so a second click reuses it", async () => {
+			const open = vi.spyOn(window, "open").mockReturnValue(null);
+			try {
+				const item = makeItem({ status: "draft" });
+				const screen = await renderEditor({ isNew: false, item, supportsPreview: true });
+				const previewBtn = screen.getByRole("button", { name: "Preview" });
+				await previewBtn.click();
+				await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
+				await previewBtn.click();
+				await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2));
+				const [first, second] = open.mock.calls;
+				expect(first![0]).toBe("https://example.com/preview");
+				expect(first![1]).not.toBe("_blank");
+				expect(second![1]).toBe(first![1]);
+			} finally {
+				open.mockRestore();
+			}
 		});
 
 		it("keeps one publish action reachable below lg", async () => {
@@ -1820,7 +2796,9 @@ describe("ContentEditor", () => {
 				const screen = await renderEditor({ isNew: false, item, onPublish: vi.fn() });
 
 				await expect.element(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
-				await expect.element(screen.getByRole("button", { name: "Save" }).first()).toBeDisabled();
+				await expect
+					.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+					.toBeNull();
 				const publishButtons = screen
 					.getByRole("button", { name: "Publish now", exact: true })
 					.all();
@@ -1879,10 +2857,10 @@ describe("ContentEditor", () => {
 		it("keeps the settings sheet open when a sortable handle restores focus after drop", async () => {
 			const media = installMatchMedia(true);
 			try {
-				const screen = await renderEditor({ isNew: false, item: makeItem() });
+				const screen = await renderBylineContent([savedCredit(makeByline())]);
 
 				await screen.getByRole("button", { name: "Settings" }).click();
-				const handle = screen.getByRole("button", { name: "Drag to reorder Publish" }).element();
+				const handle = screen.getByRole("button", { name: "Reorder Jane Smith" }).element();
 				handle.focus();
 				handle.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
 
@@ -1917,10 +2895,10 @@ describe("ContentEditor", () => {
 		it("keeps the settings sheet open when keyboard sorting is cancelled", async () => {
 			const media = installMatchMedia(true);
 			try {
-				const screen = await renderEditor({ isNew: false, item: makeItem() });
+				const screen = await renderBylineContent([savedCredit(makeByline())]);
 
 				await screen.getByRole("button", { name: "Settings" }).click();
-				const handle = screen.getByRole("button", { name: "Drag to reorder Publish" }).element();
+				const handle = screen.getByRole("button", { name: "Reorder Jane Smith" }).element();
 				handle.focus();
 				await userEvent.keyboard(" ");
 
@@ -1940,10 +2918,10 @@ describe("ContentEditor", () => {
 		it("lets Escape close the settings sheet when sorting is idle", async () => {
 			const media = installMatchMedia(true);
 			try {
-				const screen = await renderEditor({ isNew: false, item: makeItem() });
+				const screen = await renderBylineContent([savedCredit(makeByline())]);
 
 				await screen.getByRole("button", { name: "Settings" }).click();
-				const handle = screen.getByRole("button", { name: "Drag to reorder Publish" }).element();
+				const handle = screen.getByRole("button", { name: "Reorder Jane Smith" }).element();
 				handle.focus();
 				await userEvent.keyboard("{Escape}");
 
@@ -2006,7 +2984,9 @@ describe("ContentEditor", () => {
 						.element(),
 				);
 
-				const tooltip = screen.getByText("Overrides the page title in search engine results");
+				const tooltip = screen.getByRole("tooltip", {
+					name: "Overrides the page title in search engine results",
+				});
 				await expect.element(tooltip).toBeVisible();
 				expect(tooltip.element().closest<HTMLElement>("[data-base-ui-portal]")?.style.zIndex).toBe(
 					"60",
@@ -2081,11 +3061,13 @@ describe("ContentEditor", () => {
 				await expect
 					.element(screen.getByRole("button", { name: "Preview" }).first())
 					.toBeInTheDocument();
-				await expect.element(screen.getByRole("button", { name: "Save" }).first()).toBeDisabled();
+				await expect
+					.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+					.toBeNull();
 
 				media.setMatches(false);
 				await expect
-					.element(screen.getByRole("button", { name: "Settings" }))
+					.element(screen.getByRole("button", { name: "Show settings", exact: true }))
 					.not.toBeInTheDocument();
 				await expect
 					.element(screen.getByRole("button", { name: "Publish now", exact: true }))
@@ -2133,215 +3115,76 @@ describe("ContentEditor", () => {
 				exact: true,
 			});
 			await unpublishBtn.click();
+			const confirm = screen
+				.getByRole("dialog", { name: "Unpublish Post?" })
+				.getByRole("button", { name: "Unpublish", exact: true });
+			await expect.element(confirm).toBeVisible();
+			confirm.element().click();
 			expect(onUnpublish).toHaveBeenCalled();
 		});
+
+		it.each(["resolve", "reject"] as const)(
+			"disables Unpublish while the request is pending and re-enables after it %s",
+			async (settlement) => {
+				const pending = deferred();
+				const onUnpublish = vi.fn(() => pending.promise);
+				const screen = await renderEditor({
+					isNew: false,
+					item: makeItem({
+						status: "published",
+						liveRevisionId: "rev-1",
+						draftRevisionId: "rev-1",
+					}),
+					onUnpublish,
+					supportsDrafts: true,
+				});
+				const unpublish = screen
+					.getByRole("button", { name: "Unpublish Post", exact: true })
+					.element();
+
+				unpublish.click();
+				const confirm = screen
+					.getByRole("dialog", { name: "Unpublish Post?" })
+					.getByRole("button", { name: "Unpublish", exact: true });
+				await expect.element(confirm).toBeVisible();
+				confirm.element().click();
+				await vi.waitFor(() => expect(onUnpublish).toHaveBeenCalledOnce());
+				await expect.element(unpublish).toBeDisabled();
+				if (settlement === "resolve") pending.resolve();
+				else pending.reject(new Error("unpublish failed"));
+				await expect.element(unpublish).not.toBeDisabled();
+			},
+		);
 	});
 
-	describe("distraction-free mode", () => {
-		function dispatchDistractionFreeShortcut() {
-			document.dispatchEvent(
-				new KeyboardEvent("keydown", {
-					key: "\\",
-					shiftKey: true,
-					// `mod` maps to Ctrl on Linux/Windows and Cmd on macOS; firing both
-					// modifiers keeps the test deterministic across Playwright hosts.
-					ctrlKey: true,
-					metaKey: true,
-					bubbles: true,
-				}),
-			);
-		}
-
-		function getMainForm() {
-			return document.querySelector("form");
-		}
-
-		function isDistractionFree() {
-			return getMainForm()?.classList.toString().includes("fixed") ?? false;
-		}
-
-		it("toggles in and out with the advertised keyboard shortcut", async () => {
-			await renderEditor({ isNew: true });
-
-			expect(isDistractionFree()).toBe(false);
-
-			dispatchDistractionFreeShortcut();
-			await vi.waitFor(() => expect(isDistractionFree()).toBe(true));
-
-			dispatchDistractionFreeShortcut();
-			await vi.waitFor(() => expect(isDistractionFree()).toBe(false));
-		});
-
-		it("keeps the normal editor width and field chrome", async () => {
-			const screen = await renderEditor({
-				fields: {
-					title: { kind: "string", label: "Title", required: true },
-					featured_image: { kind: "image", label: "Featured image" },
-					content: { kind: "portableText", label: "Content" },
-				},
-			});
-
-			const initialImagePicker = screen
-				.getByRole("button", { name: /browse for Featured image/i })
-				.element();
-			const initialCanvasWidth = screen
-				.getByTestId("portable-text-editor")
-				.element()
-				.closest(".mx-auto")
-				?.getBoundingClientRect().width;
-			await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-
-			const imagePicker = screen
-				.getByRole("button", { name: /browse for Featured image/i })
-				.element();
-			const portableTextEditor = screen.getByTestId("portable-text-editor").element();
-			const editorCanvas = portableTextEditor.closest(".mx-auto");
-
-			expect(editorCanvas?.getBoundingClientRect().width).toBe(initialCanvasWidth);
-			expect(imagePicker).toBe(initialImagePicker);
-			expect(portableTextProps.current?.minimal).not.toBe(true);
-			expect(portableTextProps.current?.variant).toBe("document");
-		});
-
-		it("matches the settings action order and size", async () => {
-			const item = makeItem({
-				status: "published",
-				liveRevisionId: "rev-1",
-				draftRevisionId: "rev-1",
-			});
-			const screen = await renderEditor({
-				isNew: false,
-				item,
-				supportsDrafts: true,
-				supportsPreview: true,
-				onUnpublish: vi.fn(),
-			});
-
-			await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-
-			const bar = getEditorBar();
-			const actionContainer = bar.lastElementChild;
-			const actions = [...(actionContainer?.querySelectorAll("button, a") ?? [])];
-			const actionNames = actions.map(
-				(action) => action.getAttribute("aria-label") ?? action.textContent?.trim(),
-			);
-
-			expect(actionNames).toEqual([
-				"Saved",
-				"Live View",
-				"Preview",
-				"Unpublish Post",
-				"Exit distraction-free mode",
-			]);
-			for (const action of actions.slice(0, -1)) expect(action).toHaveClass("h-6.5");
-			expect(actions.at(-1)).toHaveClass("size-6.5");
-			expect(bar.firstElementChild?.querySelector("button, a")).toBeNull();
-		});
-
-		it("keeps the editor canvas and distraction-free header on the elevated surface", async () => {
-			const screen = await renderEditor({ isNew: true });
-			const form = document.querySelector("form");
-
-			expect(form).toHaveClass("bg-kumo-elevated");
-			expect(form).not.toHaveClass("bg-kumo-base");
-
-			await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-
-			expect(form).toHaveClass("bg-kumo-elevated");
-			expect(getEditorBar().className).not.toMatch(/\bbg-/);
-		});
-
-		it("toggle adds fixed class for distraction-free mode", async () => {
-			const screen = await renderEditor({ isNew: true });
-			const enterBtn = screen.getByRole("button", { name: "Enter distraction-free mode" });
-			await enterBtn.click();
-
-			// The form should now have the fixed inset-0 class
-			const form = document.querySelector("form");
-			expect(form?.classList.toString()).toContain("fixed");
-		});
-
-		it("does not exit distraction-free mode with Escape", async () => {
-			const screen = await renderEditor({ isNew: true });
-			const enterBtn = screen.getByRole("button", { name: "Enter distraction-free mode" });
-			await enterBtn.click();
-
-			// Verify we're in distraction-free mode
-			expect(document.querySelector("form")?.classList.toString()).toContain("fixed");
-
-			// Press Escape
-			document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-
-			// Wait long enough that any errant state update would have been applied.
-			await new Promise((resolve) => setTimeout(resolve, 100));
-
-			// Escape is reserved for other actions on the Posts page and must not
-			// leave distraction-free mode.
-			expect(document.querySelector("form")?.classList.toString()).toContain("fixed");
-		});
-
-		it("keeps Live View available in distraction-free mode", async () => {
-			const item = makeItem({
-				status: "published",
-				liveRevisionId: "rev-1",
-				draftRevisionId: "rev-1",
-			});
-			const screen = await renderEditor({ isNew: false, item, supportsDrafts: true });
-
-			await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-
-			const liveView = screen.getByRole("link", { name: "Live View" });
-			expect(liveView.all()).toHaveLength(1);
-			await expect.element(liveView).toBeVisible();
-		});
-
-		it("keeps scheduling available in distraction-free mode", async () => {
+	describe("scheduler", () => {
+		it("hides scheduling actions when the collection does not support scheduling", async () => {
 			const screen = await renderEditor({
 				isNew: false,
 				item: makeItem({ status: "draft" }),
 				onSchedule: vi.fn(),
+				supportsScheduling: false,
 			});
 
-			await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-			const actionContainer = getEditorBar().lastElementChild;
-			const schedule = [...(actionContainer?.querySelectorAll("button") ?? [])].find(
-				(action) => action.textContent?.trim() === "Schedule",
-			);
-			expect(schedule).toBeInstanceOf(HTMLButtonElement);
-			schedule?.click();
-
-			await expect
-				.element(screen.getByRole("dialog", { name: "Schedule publication" }))
-				.toBeVisible();
+			expect(screen.getByRole("button", { name: "Schedule" }).query()).toBeNull();
 		});
 
-		it("keeps scheduled-entry actions available in distraction-free mode", async () => {
+		it("allows removing an existing schedule without scheduling support", async () => {
 			const onUnschedule = vi.fn();
 			const screen = await renderEditor({
 				isNew: false,
 				item: makeItem({ status: "scheduled", scheduledAt: "2027-06-01T12:00:00.000Z" }),
 				onSchedule: vi.fn(),
 				onUnschedule,
+				supportsScheduling: false,
 			});
 
-			await screen.getByRole("button", { name: "Enter distraction-free mode" }).click();
-			const actionContainer = getEditorBar().lastElementChild;
-			const actions = [...(actionContainer?.querySelectorAll("button") ?? [])];
-			const changeSchedule = actions.find(
-				(action) => action.textContent?.trim() === "Change schedule",
-			);
-			const removeSchedule = actions.find(
-				(action) => action.textContent?.trim() === "Remove schedule",
-			);
-
-			expect(changeSchedule).toBeInstanceOf(HTMLButtonElement);
-			expect(removeSchedule).toBeInstanceOf(HTMLButtonElement);
-			removeSchedule?.click();
+			expect(screen.getByRole("button", { name: "Change schedule" }).query()).toBeNull();
+			await expect.element(screen.getByRole("button", { name: "Remove schedule" })).toBeVisible();
+			await screen.getByRole("button", { name: "Remove schedule" }).click();
 			expect(onUnschedule).toHaveBeenCalledOnce();
 		});
-	});
 
-	describe("scheduler", () => {
 		it("keeps draft scheduling separate from confirmed publishing", async () => {
 			const onPublish = vi.fn();
 			const screen = await renderEditor({
@@ -2385,7 +3228,7 @@ describe("ContentEditor", () => {
 			await screen.getByRole("button", { name: "Schedule" }).click();
 			const dialog = screen.getByRole("dialog", { name: "Schedule changes" });
 			await expect
-				.element(dialog.getByText("Choose when these changes replace the live version."))
+				.element(dialog.getByRole("button", { name: "Schedule changes", exact: true }))
 				.toBeVisible();
 		});
 
@@ -2456,6 +3299,27 @@ describe("ContentEditor", () => {
 
 			await expect
 				.element(screen.getByRole("heading", { name: "Edit API Docs", exact: true }))
+				.toBeInTheDocument();
+		});
+
+		it("names the back link after the list it opens", async () => {
+			const screen = await renderEditor({
+				isNew: true,
+				collectionLabel: "Post",
+				manifest: {
+					version: "1.0.0",
+					hash: "hash",
+					authMode: "passkey",
+					collections: {
+						posts: { label: "Posts", labelSingular: "Post", supports: [], hasSeo: false },
+					},
+					plugins: {},
+					taxonomies: [],
+				},
+			});
+
+			await expect
+				.element(screen.getByLabelText("Back to Posts list", { exact: true }))
 				.toBeInTheDocument();
 		});
 
@@ -2949,8 +3813,11 @@ describe("ContentEditor", () => {
 			};
 		}
 
-		it("says a required reference field needs an entry while none is selected", async () => {
+		it("says a required reference field needs an entry once a save is attempted", async () => {
 			const screen = await renderEditor({ fields: referenceField(true) });
+			expect(screen.getByText("Select at least one entry.").query()).toBeNull();
+
+			await userEvent.click(screen.getByRole("button", { name: "Save" }).first());
 
 			await expect.element(screen.getByText("Select at least one entry.")).toBeInTheDocument();
 		});
@@ -2960,6 +3827,177 @@ describe("ContentEditor", () => {
 
 			await expect.element(screen.getByText("(optional)")).toBeInTheDocument();
 			expect(screen.getByText("Select at least one entry.").query()).toBeNull();
+		});
+	});
+
+	describe("required file, image and reference fields", () => {
+		const REQUIRED_MESSAGES = ["This field is required", "Select at least one entry."];
+		const requiredFields: Record<string, FieldDescriptor> = {
+			title: { kind: "string", label: "Title", required: true },
+			attachment: { kind: "file", label: "Attachment", required: true },
+			photo: { kind: "image", label: "Photo", required: true },
+			related: {
+				kind: "reference",
+				label: "Related",
+				required: true,
+				validation: { relation: "rel-group-1", targetCollection: "posts", multiple: true },
+			},
+		};
+
+		function expectNoRequiredMessage(screen: Awaited<ReturnType<typeof renderEditor>>) {
+			for (const message of REQUIRED_MESSAGES) {
+				expect(screen.getByText(message).query()).toBeNull();
+			}
+		}
+
+		it("stays quiet when the form opens", async () => {
+			const screen = await renderEditor({ fields: requiredFields });
+			await expect.element(screen.getByRole("button", { name: "Select Attachment" })).toBeVisible();
+
+			expectNoRequiredMessage(screen);
+		});
+
+		it("reports each empty field after a save the browser stopped", async () => {
+			// The empty required title fails the browser's own check, so the form
+			// never submits; the editor still has to answer the click.
+			const onSave = vi.fn();
+			const screen = await renderEditor({ fields: requiredFields, onSave });
+
+			await userEvent.click(screen.getByRole("button", { name: "Save" }).first());
+
+			expect(onSave).not.toHaveBeenCalled();
+			await expect.element(screen.getByText("Select at least one entry.")).toBeVisible();
+			await expect.element(screen.getByText("This field is required").first()).toBeVisible();
+			expect(screen.getByText("This field is required").elements()).toHaveLength(2);
+		});
+
+		it("reports each empty field after a save that goes through", async () => {
+			const onSave = vi.fn();
+			const screen = await renderEditor({ fields: requiredFields, onSave });
+			await screen.getByLabelText("Title").fill("Hello");
+
+			await userEvent.click(screen.getByRole("button", { name: "Save" }).first());
+
+			expect(onSave).toHaveBeenCalledOnce();
+			await expect.element(screen.getByText("Select at least one entry.")).toBeVisible();
+			expect(screen.getByText("This field is required").elements()).toHaveLength(2);
+		});
+
+		it("reports each empty field after a publish", async () => {
+			const onPublish = vi.fn();
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({ status: "draft", data: { title: "Hello" } }),
+				fields: requiredFields,
+				onPublish,
+			});
+			expectNoRequiredMessage(screen);
+
+			await screen.getByRole("button", { name: "Publish now", exact: true }).click();
+			screen
+				.getByRole("dialog", { name: "Publish now?" })
+				.getByRole("button", { name: "Publish now", exact: true })
+				.element()
+				.click();
+
+			expect(onPublish).toHaveBeenCalledOnce();
+			await expect.element(screen.getByText("Select at least one entry.")).toBeVisible();
+			expect(screen.getByText("This field is required").elements()).toHaveLength(2);
+		});
+
+		it("links the message to the control that is missing a value", async () => {
+			const screen = await renderEditor({ fields: requiredFields });
+			const fileButton = screen.getByRole("button", { name: "Select Attachment" });
+			await expect.element(fileButton).not.toHaveAttribute("aria-invalid");
+
+			await userEvent.click(screen.getByRole("button", { name: "Save" }).first());
+
+			const describedBy = fileButton.element().getAttribute("aria-describedby");
+			expect(fileButton.element().getAttribute("aria-invalid")).toBe("true");
+			const message = document.getElementById(describedBy ?? "");
+			expect(message?.textContent).toBe("This field is required");
+			expect(message?.getAttribute("role")).toBe("alert");
+			expect(
+				screen
+					.getByRole("button", { name: "Add reference" })
+					.element()
+					.getAttribute("aria-invalid"),
+			).toBe("true");
+		});
+
+		it("reports a file the editor removes at once", async () => {
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({
+					data: {
+						title: "Hello",
+						attachment: {
+							id: "file-1",
+							filename: "report.pdf",
+							mimeType: "application/pdf",
+							size: 1024,
+						},
+					},
+				}),
+				fields: { title: requiredFields.title!, attachment: requiredFields.attachment! },
+			});
+			await expect.element(screen.getByText("report.pdf")).toBeVisible();
+			expectNoRequiredMessage(screen);
+
+			await screen.getByRole("button", { name: "Remove Attachment" }).click();
+
+			await expect.element(screen.getByText("This field is required")).toBeVisible();
+		});
+
+		it("starts quiet again on the next entry after a save attempt", async () => {
+			function Switcher({ item }: { item: ContentItem }) {
+				return (
+					<ContentEditor
+						collection="posts"
+						collectionLabel="Post"
+						fields={requiredFields}
+						isNew={false}
+						item={item}
+						onSave={vi.fn()}
+					/>
+				);
+			}
+			const screen = await render(
+				<Switcher item={makeItem({ id: "post-en", data: { title: "Hello" } })} />,
+			);
+			await screen.getByLabelText("Title").fill("Hello again");
+			await userEvent.click(screen.getByRole("button", { name: "Save" }).first());
+			await expect.element(screen.getByText("Select at least one entry.")).toBeVisible();
+
+			await screen.rerender(
+				<Switcher item={makeItem({ id: "post-fr", locale: "fr", data: { title: "Bonjour" } })} />,
+			);
+
+			await expect.element(screen.getByLabelText("Title")).toHaveValue("Bonjour");
+			expectNoRequiredMessage(screen);
+		});
+
+		it("reports each empty field when scheduling saves pending changes", async () => {
+			const onSchedule = vi.fn().mockResolvedValue(undefined);
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({ status: "draft", data: { title: "Hello" } }),
+				fields: requiredFields,
+				onSchedule,
+			});
+			await screen.getByLabelText("Title").fill("Hello again");
+
+			await screen.getByRole("button", { name: "Schedule" }).click();
+			screen
+				.getByRole("dialog", { name: "Schedule publication" })
+				.getByRole("button", { name: "Schedule", exact: true })
+				.element()
+				.click();
+
+			await vi.waitFor(() => expect(onSchedule).toHaveBeenCalledOnce());
+			expect(onSchedule.mock.calls[0]?.[1]).toBeDefined();
+			await expect.element(screen.getByText("Select at least one entry.")).toBeVisible();
+			expect(screen.getByText("This field is required").elements()).toHaveLength(2);
 		});
 	});
 
@@ -3012,7 +4050,9 @@ describe("ContentEditor", () => {
 			});
 
 			await expect.element(screen.getByLabelText("Title")).toBeDisabled();
-			await expect.element(screen.getByRole("button", { name: "Save" }).first()).toBeDisabled();
+			await expect
+				.element(screen.getByRole("button", { name: "Save", exact: true }).query())
+				.toBeNull();
 		});
 
 		it("stops autosaving as soon as the entry is taken away", async () => {
@@ -3106,15 +4146,50 @@ describe("ContentEditor", () => {
 			expect(portableTextProps.current?.editable).toBe(false);
 		});
 
-		it("can still leave distraction-free mode while the entry is read-only", async () => {
-			const screen = await renderEditor({ isNew: false, item: makeItem(), readOnly: true });
+		it("shows the fields of every block in a read-only entry", async () => {
+			const screen = await renderEditor({
+				isNew: false,
+				item: makeItem({
+					data: {
+						title: "Test",
+						layout: [{ _type: "event", _version: 1, _key: "first", seats: 40 }],
+					},
+				}),
+				fields: {
+					title: { kind: "string", label: "Title", required: true },
+					layout: {
+						kind: "blocks",
+						label: "Layout",
+						validation: { allowedTypes: ["event"], retiredTypes: [] },
+						blockTypes: [
+							{
+								id: "event-type",
+								slug: "event",
+								label: "Event",
+								currentVersion: 1,
+								source: "user",
+								createdAt: "2026-01-01T00:00:00.000Z",
+								updatedAt: "2026-01-01T00:00:00.000Z",
+								versions: [
+									{
+										id: "event-v1",
+										blockTypeId: "event-type",
+										version: 1,
+										fields: [{ slug: "seats", label: "Seats", type: "integer" }],
+										fingerprint: "one",
+										active: true,
+										createdAt: "2026-01-01T00:00:00.000Z",
+										updatedAt: "2026-01-01T00:00:00.000Z",
+									},
+								],
+							},
+						],
+					},
+				},
+				readOnly: true,
+			});
 
-			const enter = screen.getByRole("button", { name: "Enter distraction-free mode" });
-			await expect.element(enter).not.toBeDisabled();
-			await enter.click();
-
-			const exit = screen.getByRole("button", { name: "Exit distraction-free mode" });
-			await expect.element(exit).not.toBeDisabled();
+			await expect.element(screen.getByLabelText("Seats", { exact: true })).toHaveValue(40);
 		});
 
 		it("does not offer to save over a newer version while the entry is read-only", async () => {
@@ -3340,13 +4415,11 @@ describe("ContentEditor", () => {
 				supportsDrafts: true,
 			});
 
+			await screen.getByRole("button", { name: "Expand all" }).click();
 			const headings = screen.getByRole("textbox", { name: "Heading" }).all();
 			await headings[0]!.fill("First, edited again");
-			const firstHandle = screen.getByRole("button", { name: "Reorder Hero" }).first().element();
-			firstHandle.focus();
-			await userEvent.keyboard("{Space}");
-			await userEvent.keyboard("{ArrowDown}");
-			await userEvent.keyboard("{Space}");
+			await screen.getByRole("button", { name: "Hero actions" }).first().click();
+			await screen.getByRole("menuitem", { name: "Move down" }).click();
 
 			await screen.rerender(
 				<ContentEditor
@@ -3368,12 +4441,837 @@ describe("ContentEditor", () => {
 			expect(
 				Array.from(document.querySelectorAll<HTMLElement>("[data-block-key]"), (element) => [
 					element.dataset.blockKey,
-					element.textContent?.includes("Version 2") ? 2 : 1,
+					element.textContent?.includes("Inactive version") ? 1 : 2,
 				]),
 			).toEqual([
 				["second", 2],
 				["first", 1],
 			]);
+		});
+	});
+});
+
+describe("ContentEditor revision view", () => {
+	const revisionFields: Record<string, FieldDescriptor> = {
+		title: { kind: "string", label: "Title" },
+		content: { kind: "portableText", label: "Content" },
+	};
+
+	function textBlocks(text: string) {
+		return [
+			{
+				_type: "block",
+				_key: "b1",
+				style: "normal",
+				markDefs: [],
+				children: [{ _type: "span", _key: "s1", text, marks: [] }],
+			},
+		];
+	}
+
+	function makeRevisionItem(overrides: Partial<ContentItem> = {}): ContentItem {
+		return makeItem({
+			status: "published",
+			data: { title: "Draft title", content: textBlocks("Draft body") },
+			liveRevisionId: "rev-old",
+			draftRevisionId: "rev-draft",
+			...overrides,
+		});
+	}
+
+	function makeRevisionList(currentId = "rev-draft"): RevisionListResponse {
+		return {
+			items: [
+				{
+					id: currentId,
+					collection: "posts",
+					entryId: "item-1",
+					data: { title: "Draft title", content: textBlocks("Draft body") },
+					authorId: "user-maya",
+					author: { id: "user-maya", name: "Maya Chen" },
+					createdAt: "2026-10-02 13:12:00",
+				},
+				{
+					id: "rev-old",
+					collection: "posts",
+					entryId: "item-1",
+					data: { title: "Old title", content: textBlocks("Old body") },
+					authorId: "user-sam",
+					author: { id: "user-sam", name: "Sam Rivera" },
+					createdAt: "2026-10-01 09:30:00",
+				},
+			],
+			total: 2,
+		};
+	}
+
+	function revisionEditorProps(props: Partial<ContentEditorProps> = {}): ContentEditorProps {
+		return {
+			collection: "posts",
+			collectionLabel: "Post",
+			fields: revisionFields,
+			isNew: false,
+			item: makeRevisionItem(),
+			supportsRevisions: true,
+			supportsDrafts: true,
+			onSave: vi.fn(),
+			...props,
+		};
+	}
+
+	function renderRevisionEditor(props: Partial<ContentEditorProps> = {}) {
+		return render(<ContentEditor {...revisionEditorProps(props)} />, { wrapper: Toasty });
+	}
+
+	const versionCanvas = () => document.querySelector("article[aria-label^='Version from']");
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		portableTextMountCount = 0;
+		onEditorReadyCalls = [];
+		portableTextProps.current = null;
+		vi.mocked(fetchRevisions).mockImplementation(async () => makeRevisionList());
+		vi.mocked(diffVersion).mockImplementation(({ revisions, index }) => ({
+			hasPrevious: index + 1 < revisions.length,
+			fields: [],
+			slug: null,
+			changes: [],
+		}));
+	});
+
+	it("shows a version in place of the editor and comes back to the unsaved edits", async () => {
+		const screen = await renderRevisionEditor();
+		await screen.getByLabelText("Title").fill("Unsaved title");
+		expect(portableTextMountCount).toBe(1);
+
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await expect.element(screen.getByRole("article", { name: /^Version from/ })).toBeVisible();
+		await expect.element(screen.getByLabelText("Title")).not.toBeVisible();
+		await expect.element(screen.getByTestId("portable-text-editor")).not.toBeVisible();
+
+		await screen.getByRole("button", { name: "Back to editing" }).click();
+		await expect.element(screen.getByLabelText("Title")).toBeVisible();
+		await expect.element(screen.getByLabelText("Title")).toHaveValue("Unsaved title");
+		expect(versionCanvas()).toBeNull();
+		expect(portableTextMountCount).toBe(1);
+	});
+
+	it("switches versions without drawing the canvas again, so its images don't reload", async () => {
+		const screen = await renderRevisionEditor();
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		const canvas = screen.getByRole("article", { name: /^Version from/ });
+		await expect.element(canvas).toBeVisible();
+		const shown = canvas.element();
+
+		await screen.getByRole("button", { name: "View rev-draft" }).click();
+		await expect.element(screen.getByText("Current version", { exact: true })).toBeVisible();
+		expect(canvas.element()).toBe(shown);
+	});
+
+	it("shows each version on its own when one of them can't be shown", async () => {
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		unreadableVersion = /October 1/;
+		try {
+			const screen = await renderRevisionEditor();
+			const failed = screen.getByText("This version can't be shown.");
+			await screen.getByRole("button", { name: "View rev-draft" }).click();
+			await expect.element(screen.getByRole("article", { name: /^Version from/ })).toBeVisible();
+
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			await expect.element(failed).toBeVisible();
+
+			await screen.getByRole("button", { name: "View rev-draft" }).click();
+			await expect.element(screen.getByRole("article", { name: /^Version from/ })).toBeVisible();
+			await expect.element(failed).not.toBeInTheDocument();
+		} finally {
+			unreadableVersion = null;
+			consoleError.mockRestore();
+		}
+	});
+
+	it("sends a pending autosave before showing a version and holds autosave while it is shown", async () => {
+		vi.useFakeTimers();
+		try {
+			const onAutosave = vi.fn();
+			const screen = await renderRevisionEditor({ onAutosave });
+			await screen.getByLabelText("Title").fill("Typed just now");
+			await vi.advanceTimersByTimeAsync(500);
+			expect(onAutosave).not.toHaveBeenCalled();
+
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			expect(onAutosave).toHaveBeenCalledOnce();
+			expect(onAutosave).toHaveBeenLastCalledWith(
+				expect.objectContaining({ data: expect.objectContaining({ title: "Typed just now" }) }),
+			);
+
+			await screen.getByLabelText("Slug").fill("edited-while-viewing");
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(onAutosave).toHaveBeenCalledOnce();
+
+			await screen.getByRole("button", { name: "Back to editing" }).click();
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(onAutosave).toHaveBeenCalledTimes(2);
+			expect(onAutosave).toHaveBeenLastCalledWith(
+				expect.objectContaining({ slug: "edited-while-viewing" }),
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("names who edited since the live version in the publish confirmation", async () => {
+		vi.mocked(fetchRevisionEditors).mockResolvedValue([{ id: "user-maya", name: "Maya Chen" }]);
+		const screen = await renderRevisionEditor({ onPublish: vi.fn() });
+		await screen.getByRole("button", { name: "Publish changes", exact: true }).click();
+		const dialog = screen.getByRole("dialog", { name: "Publish changes?" });
+
+		await expect.element(dialog.getByText("Edited by Maya Chen", { exact: true })).toBeVisible();
+		expect(fetchRevisionEditors).toHaveBeenCalledWith(
+			"posts",
+			"item-1",
+			expect.objectContaining({ since: "rev-old" }),
+		);
+	});
+
+	it("pauses saving and publishing while a version is shown", async () => {
+		const onSave = vi.fn();
+		const onPublish = vi.fn();
+		const screen = await renderRevisionEditor({
+			onSave,
+			onPublish,
+			item: makeRevisionItem({ status: "draft", liveRevisionId: null }),
+		});
+		await screen.getByLabelText("Title").fill("Unsaved title");
+		const save = screen.getByRole("button", { name: "Save", exact: true }).first();
+		const publish = screen.getByRole("button", { name: "Publish now", exact: true });
+		await expect.element(save).toBeEnabled();
+		await expect.element(publish).toBeEnabled();
+
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+		await expect.element(save).toBeDisabled();
+		await expect.element(publish).toBeDisabled();
+
+		await screen.getByLabelText("Slug").fill("typed-slug");
+		await userEvent.keyboard("{Enter}");
+		expect(onSave).not.toHaveBeenCalled();
+
+		await screen.getByRole("button", { name: "Back to editing" }).click();
+		await expect.element(save).toBeEnabled();
+		await expect.element(publish).toBeEnabled();
+	});
+
+	it("leaves the version with Escape, but not while the restore dialog is open", async () => {
+		const screen = await renderRevisionEditor();
+		const opener = screen.getByRole("button", { name: "View rev-old" });
+		await opener.click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+		const dialog = screen.getByRole("dialog", { name: "Restore this version?" });
+		await expect.element(dialog).toBeVisible();
+
+		await userEvent.keyboard("{Escape}");
+		await expect.element(dialog).not.toBeInTheDocument();
+		await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+
+		await userEvent.keyboard("{Escape}");
+		await expect
+			.element(screen.getByRole("button", { name: "Back to editing" }))
+			.not.toBeInTheDocument();
+		await expect.element(screen.getByLabelText("Title")).toBeVisible();
+		await expect.element(opener).toHaveFocus();
+	});
+
+	it("loads a restored version that arrives after the editor was told to reload", async () => {
+		vi.mocked(restoreRevision).mockResolvedValue(
+			makeRevisionItem({
+				draftRevisionId: "rev-restored",
+				data: { title: "Old title", content: textBlocks("Old body") },
+			}),
+		);
+		function Host() {
+			const [item, setItem] = React.useState(makeRevisionItem());
+			const [resetToken, setResetToken] = React.useState(0);
+			return (
+				<ContentEditor
+					{...revisionEditorProps()}
+					item={item}
+					itemResetToken={resetToken}
+					onRevisionRestored={async (restored) => {
+						setResetToken((token) => token + 1);
+						await new Promise((resolve) => setTimeout(resolve, 50));
+						setItem(restored);
+					}}
+				/>
+			);
+		}
+		const screen = await render(<Host />, { wrapper: Toasty });
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+		screen
+			.getByRole("dialog", { name: "Restore this version?" })
+			.getByRole("button", { name: "Restore", exact: true })
+			.element()
+			.click();
+
+		await expect.element(screen.getByLabelText("Title")).toHaveValue("Old title");
+		await expect
+			.element(screen.getByTestId("portable-text-editor"))
+			.toHaveAttribute("data-content", "Old body");
+		await expect
+			.element(screen.getByRole("status", { name: "Version to focus" }))
+			.toHaveTextContent("rev-restored");
+	});
+
+	it.each([
+		["with a draft", makeRevisionItem(), "Your draft will be replaced with the version from"],
+		[
+			"without a draft",
+			makeRevisionItem({ draftRevisionId: null, liveRevisionId: "rev-draft" }),
+			"becomes your draft. The live site won't change until you publish.",
+		],
+		[
+			"that is scheduled",
+			makeRevisionItem({ scheduledAt: "2026-10-20T09:00:00.000Z" }),
+			"the restored version goes live at the scheduled time.",
+		],
+	])("says what restoring does to an entry %s", async (_, item, description) => {
+		const screen = await renderRevisionEditor({ item });
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+
+		await expect
+			.element(
+				screen
+					.getByRole("dialog", { name: "Restore this version?" })
+					.getByText(description, { exact: false }),
+			)
+			.toBeVisible();
+	});
+
+	it("offers nothing to restore for a version that matches the current one", async () => {
+		vi.mocked(fetchRevisions).mockImplementation(async () => {
+			const list = makeRevisionList();
+			const current = list.items[0]!;
+			return { ...list, items: list.items.map((item) => ({ ...item, data: { ...current.data } })) };
+		});
+		const screen = await renderRevisionEditor();
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+
+		await expect.element(screen.getByText("Same as current version")).toBeVisible();
+		expect(screen.getByRole("button", { name: "Restore", exact: true }).query()).toBeNull();
+	});
+
+	it("replaces unsaved edits when a host reloads the restored entry without a reset", async () => {
+		vi.mocked(restoreRevision).mockResolvedValue(
+			makeRevisionItem({
+				draftRevisionId: "rev-restored",
+				data: { title: "Old title", content: textBlocks("Old body") },
+			}),
+		);
+		function Host() {
+			const [item, setItem] = React.useState(makeRevisionItem());
+			return (
+				<ContentEditor
+					{...revisionEditorProps()}
+					item={item}
+					onRevisionRestored={(restored) => setItem(restored)}
+				/>
+			);
+		}
+		const screen = await render(<Host />, { wrapper: Toasty });
+		await screen.getByLabelText("Title").fill("Unsaved title");
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+		const dialog = screen.getByRole("dialog", { name: "Restore this version?" });
+		await expect
+			.element(dialog.getByText("Your unsaved changes will be lost.", { exact: false }))
+			.toBeVisible();
+		dialog.getByRole("button", { name: "Restore", exact: true }).element().click();
+
+		await expect.element(screen.getByLabelText("Title")).toHaveValue("Old title");
+		await expect
+			.element(screen.getByTestId("portable-text-editor"))
+			.toHaveAttribute("data-content", "Old body");
+		expect(portableTextMountCount).toBe(2);
+	});
+
+	it("loads the restored version for a host that only listens for the restore", async () => {
+		const restored = makeRevisionItem({
+			draftRevisionId: "rev-restored",
+			data: { title: "Old title", content: textBlocks("Old body") },
+		});
+		let stored = makeRevisionItem();
+		vi.mocked(restoreRevision).mockImplementation(async () => {
+			stored = restored;
+			return restored;
+		});
+		const onRevisionRestored = vi.fn();
+		function Host() {
+			const { data } = useQuery({
+				queryKey: ["content", "posts", stored.id],
+				queryFn: async () => stored,
+			});
+			if (!data) return null;
+			return (
+				<ContentEditor
+					{...revisionEditorProps()}
+					item={data}
+					onRevisionRestored={onRevisionRestored}
+				/>
+			);
+		}
+		const screen = await render(<Host />, { wrapper: Toasty });
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+		screen
+			.getByRole("dialog", { name: "Restore this version?" })
+			.getByRole("button", { name: "Restore", exact: true })
+			.element()
+			.click();
+
+		await expect.element(screen.getByLabelText("Title")).toHaveValue("Old title");
+		await expect
+			.element(screen.getByRole("button", { name: "Back to editing" }))
+			.not.toBeInTheDocument();
+		expect(onRevisionRestored).toHaveBeenCalledWith(restored);
+	});
+
+	it("goes back to the restored body, not the replaced one, when Esc is pressed while it loads", async () => {
+		const restored = makeRevisionItem({
+			draftRevisionId: "rev-restored",
+			data: { title: "Old title", content: textBlocks("Old body") },
+		});
+		let stored = makeRevisionItem();
+		let loadRestored = () => {};
+		const restoredLoaded = new Promise<void>((resolve) => {
+			loadRestored = resolve;
+		});
+		vi.mocked(restoreRevision).mockImplementation(async () => {
+			stored = restored;
+			return restored;
+		});
+		function Host() {
+			const { data } = useQuery({
+				queryKey: ["content", "posts", stored.id],
+				queryFn: async () => {
+					const item = stored;
+					if (item === restored) await restoredLoaded;
+					return item;
+				},
+			});
+			if (!data) return null;
+			return <ContentEditor {...revisionEditorProps()} item={data} onRevisionRestored={vi.fn()} />;
+		}
+		const screen = await render(<Host />, { wrapper: Toasty });
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+		const dialog = screen.getByRole("dialog", { name: "Restore this version?" });
+		dialog.getByRole("button", { name: "Restore", exact: true }).element().click();
+		await expect.element(dialog).not.toBeInTheDocument();
+
+		await userEvent.keyboard("{Escape}");
+		loadRestored();
+
+		await expect
+			.element(screen.getByRole("button", { name: "Back to editing" }))
+			.not.toBeInTheDocument();
+		await expect
+			.element(screen.getByTestId("portable-text-editor"))
+			.toHaveAttribute("data-content", "Old body");
+	});
+
+	it("lets the writer carry on when the restored entry can't be loaded", async () => {
+		vi.mocked(restoreRevision).mockResolvedValue(
+			makeRevisionItem({ draftRevisionId: "rev-restored" }),
+		);
+		const screen = await renderRevisionEditor({
+			onRevisionRestored: () => Promise.reject(new Error("The entry couldn't be loaded.")),
+		});
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await screen.getByRole("button", { name: "Restore", exact: true }).click();
+		const dialog = screen.getByRole("dialog", { name: "Restore this version?" });
+		dialog.getByRole("button", { name: "Restore", exact: true }).element().click();
+
+		await expect.element(dialog.getByText("The entry couldn't be loaded.")).toBeVisible();
+		dialog.getByRole("button", { name: "Cancel" }).element().click();
+		await expect
+			.element(screen.getByRole("button", { name: "Restore", exact: true }))
+			.toBeEnabled();
+		await screen.getByRole("button", { name: "View rev-draft" }).click();
+		await expect.element(screen.getByText("Current version", { exact: true })).toBeVisible();
+	});
+
+	it("keeps the body editor mounted when a save reloads the entry behind newer typing", async () => {
+		const props = revisionEditorProps();
+		const screen = await render(<ContentEditor {...props} itemResetToken={0} />, {
+			wrapper: Toasty,
+		});
+		await expect
+			.element(screen.getByTestId("portable-text-editor"))
+			.toHaveAttribute("data-content", "Draft body");
+		const onChange = portableTextProps.current?.onChange as (value: unknown) => void;
+		onChange(textBlocks("Saved body, and more"));
+		await expect.element(screen.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+
+		await screen.rerender(
+			<ContentEditor
+				{...props}
+				item={makeRevisionItem({
+					draftRevisionId: "rev-saved",
+					updatedAt: "2026-10-02T14:00:00Z",
+					data: { title: "Saved title", content: textBlocks("Saved body") },
+				})}
+				itemResetToken={1}
+			/>,
+		);
+		await expect.element(screen.getByLabelText("Title")).toHaveValue("Saved title");
+		expect(portableTextMountCount).toBe(1);
+	});
+
+	it("goes back to editing when another entry opens while a version is shown", async () => {
+		const props = revisionEditorProps();
+		const screen = await render(<ContentEditor {...props} />, { wrapper: Toasty });
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+
+		await screen.rerender(<ContentEditor {...props} item={makeRevisionItem({ id: "item-2" })} />);
+		await expect
+			.element(screen.getByRole("button", { name: "Back to editing" }))
+			.not.toBeInTheDocument();
+		await expect.element(screen.getByLabelText("Title")).toBeVisible();
+	});
+
+	it("steps between versions from the bar when the list is in the closed phone sheet", async () => {
+		await page.viewport(390, 844);
+		const media = installMatchMedia(true);
+		try {
+			const screen = await renderRevisionEditor();
+			await screen.getByRole("button", { name: "Settings" }).click();
+			await screen.getByRole("button", { name: "View rev-draft" }).click();
+			await expect
+				.element(screen.getByRole("navigation", { name: "Settings" }))
+				.not.toBeInTheDocument();
+
+			const heading = screen.getByRole("heading", { level: 2 });
+			await expect.element(heading).toHaveFocus();
+			await expect.element(screen.getByText("Maya Chen", { exact: true })).toBeVisible();
+			const older = screen.getByRole("button", { name: "Older version" });
+			const newer = screen.getByRole("button", { name: "Newer version" });
+			await expect.element(newer).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Restore", exact: true }).query()).toBeNull();
+
+			await older.click();
+			await expect.element(screen.getByText("Sam Rivera", { exact: true })).toBeVisible();
+			await expect.element(older).toBeDisabled();
+			await expect.element(newer).toBeEnabled();
+			await expect.element(heading).toHaveFocus();
+			await expect
+				.element(screen.getByRole("button", { name: "Restore", exact: true }))
+				.toBeVisible();
+			await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+		} finally {
+			media.restore();
+			await page.viewport(1280, 800);
+		}
+	});
+
+	it("goes back to where the editor was scrolled on a phone", async () => {
+		await page.viewport(390, 844);
+		const media = installMatchMedia(true);
+		const tallPage = document.createElement("style");
+		tallPage.textContent = `
+			[data-emdash-editor-canvas] { height: 400px; overflow-y: auto; }
+			[data-emdash-editor-canvas] .emdash-editor-page { min-height: 3000px; }
+		`;
+		document.head.append(tallPage);
+		try {
+			const screen = await renderRevisionEditor();
+			const canvas = document.querySelector<HTMLElement>("[data-emdash-editor-canvas]")!;
+			canvas.scrollTop = 500;
+			screen.getByRole("button", { name: "Settings" }).element().click();
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			const back = screen.getByRole("button", { name: "Back to editing" });
+			await expect.element(back).toBeVisible();
+
+			back.element().click();
+			await expect.element(screen.getByRole("button", { name: "Settings" })).toHaveFocus();
+			expect(canvas.scrollTop).toBe(500);
+		} finally {
+			tallPage.remove();
+			media.restore();
+			await page.viewport(1280, 800);
+		}
+	});
+
+	it("goes back to editing before the outline moves to a heading", async () => {
+		outlineClicks.editorVisible.length = 0;
+		const screen = await renderRevisionEditor();
+		await screen.getByRole("button", { name: "View rev-old" }).click();
+		await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+
+		await screen.getByRole("button", { name: "Outline heading" }).click();
+		expect(outlineClicks.editorVisible).toEqual([true]);
+		await expect
+			.element(screen.getByRole("button", { name: "Back to editing" }))
+			.not.toBeInTheDocument();
+	});
+
+	it("lets Escape close the phone sheet before it leaves the version", async () => {
+		const media = installMatchMedia(true);
+		try {
+			const screen = await renderRevisionEditor();
+			const settings = screen.getByRole("button", { name: "Settings" });
+			await settings.click();
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			await expect.element(screen.getByRole("heading", { level: 2 })).toHaveFocus();
+
+			await settings.click();
+			await expect
+				.element(screen.getByRole("navigation", { name: "Settings" }))
+				.toBeInTheDocument();
+			await userEvent.keyboard("{Escape}");
+			await expect
+				.element(screen.getByRole("navigation", { name: "Settings" }))
+				.not.toBeInTheDocument();
+			await expect.element(screen.getByRole("button", { name: "Older version" })).toBeVisible();
+
+			screen.getByRole("heading", { level: 2 }).element().focus();
+			await userEvent.keyboard("{Escape}");
+			await expect
+				.element(screen.getByRole("button", { name: "Older version" }))
+				.not.toBeInTheDocument();
+			await expect.element(settings).toHaveFocus();
+		} finally {
+			media.restore();
+		}
+	});
+
+	it("turns changes back on and moves focus to a change picked from the list", async () => {
+		const screen = await renderRevisionEditor();
+		await screen.getByRole("button", { name: "View rev-draft" }).click();
+		const toggle = screen.getByRole("switch", { name: "Show changes" });
+		await toggle.click();
+		await expect.element(toggle).not.toBeChecked();
+		await expect
+			.element(screen.getByRole("article", { name: /^Version from/ }))
+			.toHaveAttribute("data-show-changes", "false");
+
+		await screen.getByRole("button", { name: "Go to change" }).click();
+		await expect.element(toggle).toBeChecked();
+		await expect.element(screen.getByText("Changed paragraph")).toHaveFocus();
+	});
+
+	describe("when the version list reloads", () => {
+		function renderWithClient(props: Partial<ContentEditorProps> = {}) {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			function Wrapper({ children }: React.PropsWithChildren) {
+				return (
+					<QueryClientProvider client={queryClient}>
+						<Toasty>{children}</Toasty>
+					</QueryClientProvider>
+				);
+			}
+			const result = render(<ContentEditor {...revisionEditorProps(props)} />, {
+				wrapper: Wrapper,
+			});
+			return { queryClient, result };
+		}
+
+		function revisionEntry(id: string): RevisionListItem {
+			return {
+				id,
+				collection: "posts",
+				entryId: "item-1",
+				data: { title: id },
+				authorId: "user-sam",
+				author: { id: "user-sam", name: `Author of ${id}` },
+				createdAt: "2026-09-20 10:00:00",
+			};
+		}
+
+		function listOf(ids: string[], total: number): RevisionListResponse {
+			return { items: ids.map(revisionEntry), total };
+		}
+
+		function serveLists(partial: RevisionListResponse, full: RevisionListResponse) {
+			vi.mocked(fetchRevisions).mockImplementation(async (_collection, _id, options) =>
+				options?.limit === 100 ? full : partial,
+			);
+		}
+
+		it("follows to the draft an autosave makes from the published version being shown", async () => {
+			const item = makeRevisionItem({ draftRevisionId: null, liveRevisionId: "rev-draft" });
+			const { queryClient, result } = renderWithClient({ item });
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-draft" }).click();
+			await expect.element(screen.getByText("Current version", { exact: true })).toBeVisible();
+
+			const draft = { ...revisionEntry("rev-new-draft"), author: { id: "u", name: "Ana Diaz" } };
+			queryClient.setQueriesData<RevisionListResponse>({ queryKey: ["revisions"] }, (list) =>
+				list
+					? withAutosavedDraft(list, {
+							draft,
+							previousDraftId: null,
+							previousIsAutosave: false,
+							liveRevisionId: "rev-draft",
+							limit: 21,
+						})
+					: list,
+			);
+			await screen.rerender(
+				<ContentEditor
+					{...revisionEditorProps({ item: { ...item, draftRevisionId: "rev-new-draft" } })}
+				/>,
+			);
+
+			await expect.element(screen.getByText("Ana Diaz", { exact: true })).toBeVisible();
+			await expect.element(screen.getByText("Current version", { exact: true })).toBeVisible();
+			await vi.waitFor(() =>
+				expect(document.querySelector('p[role="status"][aria-live="polite"]')?.textContent).toMatch(
+					/^Viewing the version from .* by .*Ana Diaz/,
+				),
+			);
+		});
+
+		it("asks for the shorter list again when the full one fails to load", async () => {
+			vi.mocked(fetchRevisions).mockImplementation(async (_collection, _id, options) => {
+				if (options?.limit === 100) throw new Error("Failed to fetch revisions");
+				return listOf(["rev-draft", "rev-old", "rev-older"], 4);
+			});
+			const { queryClient, result } = renderWithClient();
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+
+			vi.mocked(fetchRevisions).mockImplementation(async (_collection, _id, options) => {
+				if (options?.limit === 100) throw new Error("Failed to fetch revisions");
+				return listOf(["rev-new", "rev-draft", "rev-old"], 5);
+			});
+			await queryClient.invalidateQueries({ queryKey: ["revisions"] });
+
+			await expect
+				.element(screen.getByRole("button", { name: "Back to editing" }))
+				.not.toBeInTheDocument();
+			await expect
+				.element(screen.getByText("Couldn't load this version", { exact: false }))
+				.toBeInTheDocument();
+			await expect
+				.element(screen.getByRole("status", { name: "Versions requested" }))
+				.toHaveTextContent("21");
+		});
+
+		it("loads the rest of the list for a version newer saves push to its end", async () => {
+			serveLists(listOf(["rev-draft", "rev-old", "rev-older"], 4), listOf([], 0));
+			const { queryClient, result } = renderWithClient();
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			const toggle = screen.getByRole("switch", { name: "Show changes" });
+			await expect.element(toggle).toBeVisible();
+
+			serveLists(
+				listOf(["rev-new", "rev-draft", "rev-old"], 5),
+				listOf(["rev-new", "rev-draft", "rev-old", "rev-older", "rev-oldest"], 5),
+			);
+			await queryClient.invalidateQueries({ queryKey: ["revisions"] });
+
+			await vi.waitFor(() =>
+				expect(fetchRevisions).toHaveBeenCalledWith(
+					"posts",
+					"item-1",
+					expect.objectContaining({ limit: 100 }),
+				),
+			);
+			await vi.waitFor(() =>
+				expect(vi.mocked(diffVersion).mock.lastCall?.[0].revisions).toHaveLength(5),
+			);
+			await expect.element(toggle).toBeVisible();
+			const withoutPredecessor = vi
+				.mocked(diffVersion)
+				.mock.calls.filter(([input]) => input.index + 1 >= input.revisions.length);
+			expect(withoutPredecessor).toEqual([]);
+		});
+
+		it("finds a version newer saves push out of the loaded list", async () => {
+			serveLists(listOf(["rev-draft", "rev-old", "rev-older"], 4), listOf([], 0));
+			const { queryClient, result } = renderWithClient();
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			await expect.element(screen.getByText("Author of rev-old", { exact: true })).toBeVisible();
+
+			serveLists(
+				listOf(["rev-new-2", "rev-new", "rev-draft"], 6),
+				listOf(["rev-new-2", "rev-new", "rev-draft", "rev-old", "rev-older", "rev-oldest"], 6),
+			);
+			await queryClient.invalidateQueries({ queryKey: ["revisions"] });
+
+			await vi.waitFor(() =>
+				expect(fetchRevisions).toHaveBeenCalledWith(
+					"posts",
+					"item-1",
+					expect.objectContaining({ limit: 100 }),
+				),
+			);
+			await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+			await expect.element(screen.getByText("Author of rev-old", { exact: true })).toBeVisible();
+			expect(document.body.textContent).not.toContain("no longer available");
+		});
+
+		it("compares again when a version's data changes under the same id", async () => {
+			const { queryClient, result } = renderWithClient();
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			await expect.element(screen.getByRole("button", { name: "Back to editing" })).toBeVisible();
+
+			queryClient.setQueriesData<RevisionListResponse>({ queryKey: ["revisions"] }, (list) =>
+				list
+					? {
+							...list,
+							items: list.items.map((item) =>
+								item.id === "rev-old"
+									? { ...item, data: { ...item.data, title: "Merged title" } }
+									: item,
+							),
+						}
+					: list,
+			);
+
+			await vi.waitFor(() => {
+				const input = vi.mocked(diffVersion).mock.lastCall?.[0];
+				expect(input?.revisions[input.index]?.data).toMatchObject({ title: "Merged title" });
+			});
+		});
+
+		it("goes back to editing when the versions can't be loaded", async () => {
+			vi.mocked(fetchRevisions).mockRejectedValue(new Error("Failed to fetch revisions"));
+			const { result } = renderWithClient();
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+
+			await expect.element(screen.getByLabelText("Title")).toBeVisible();
+			await expect
+				.element(screen.getByRole("status").filter({ hasText: "Couldn't load this version" }))
+				.toBeInTheDocument();
+		});
+
+		it("goes back to editing when the shown version is no longer listed", async () => {
+			const { queryClient, result } = renderWithClient();
+			const screen = await result;
+			await screen.getByRole("button", { name: "View rev-old" }).click();
+			await expect.element(screen.getByText("Sam Rivera", { exact: true })).toBeVisible();
+
+			vi.mocked(fetchRevisions).mockImplementation(async () => ({
+				items: makeRevisionList().items.slice(0, 1),
+				total: 1,
+			}));
+			await queryClient.invalidateQueries({ queryKey: ["revisions"] });
+
+			await expect
+				.element(screen.getByRole("button", { name: "Back to editing" }))
+				.not.toBeInTheDocument();
+			await expect.element(screen.getByLabelText("Title")).toBeVisible();
+			await expect
+				.element(screen.getByRole("status").filter({ hasText: "no longer available" }))
+				.toBeInTheDocument();
 		});
 	});
 });

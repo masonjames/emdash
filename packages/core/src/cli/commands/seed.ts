@@ -5,7 +5,7 @@
  */
 
 import { readFile, access, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { defineCommand } from "citty";
 import consola from "consola";
@@ -17,6 +17,7 @@ import { claimExplicitSeedOwnership } from "../../seed/ownership.js";
 import type { SeedFile, SeedApplyOptions } from "../../seed/types.js";
 import { validateSeed } from "../../seed/validate.js";
 import { LocalStorage } from "../../storage/local.js";
+import type { Storage } from "../../storage/types.js";
 
 interface PackageJson {
 	name?: string;
@@ -128,6 +129,11 @@ export const seedCommand = defineCommand({
 			description: "Base URL for media files",
 			default: "/_emdash/api/media/file",
 		},
+		"skip-media": {
+			type: "boolean",
+			description: "Keep $media URLs as external references and skip local files without uploading",
+			default: false,
+		},
 	},
 	async run({ args }) {
 		const cwd = resolve(args.cwd);
@@ -200,14 +206,16 @@ export const seedCommand = defineCommand({
 			process.exit(1);
 		}
 
-		// Set up storage for $media resolution
-		const uploadsDir = resolve(cwd, args["uploads-dir"]);
-		await mkdir(uploadsDir, { recursive: true });
-
-		const storage = new LocalStorage({
-			directory: uploadsDir,
-			baseUrl: args["media-base-url"],
-		});
+		// Set up storage for $media resolution unless media handling is skipped
+		let storage: Storage | undefined;
+		if (!args["skip-media"]) {
+			const uploadsDir = resolve(cwd, args["uploads-dir"]);
+			await mkdir(uploadsDir, { recursive: true });
+			storage = new LocalStorage({
+				directory: uploadsDir,
+				baseUrl: args["media-base-url"],
+			});
+		}
 
 		// Prepare apply options
 		const onConflictRaw = args["on-conflict"];
@@ -221,7 +229,9 @@ export const seedCommand = defineCommand({
 		const options: SeedApplyOptions = {
 			includeContent: args.content,
 			onConflict: onConflictRaw,
+			mediaBasePath: dirname(seedPath),
 			storage,
+			skipMediaDownload: args["skip-media"],
 		};
 
 		// Apply seed
