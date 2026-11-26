@@ -57,7 +57,6 @@ describe("storage download lifetime on image revalidation", () => {
 			expect(response.status).toBe(304);
 			expect(response.body).toBeNull();
 			expect(cancel).toHaveBeenCalledOnce();
-			expect(response.headers.get("Content-Type")).toBeNull();
 			expect(response.headers.get("ETag")).toBe(initial.headers.get("ETag"));
 		},
 	);

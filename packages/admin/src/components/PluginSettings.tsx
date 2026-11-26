@@ -7,7 +7,7 @@
  * server never returns their values, only whether one is set.
  */
 
-import { Button, Input, InputArea, Select, Switch, Toast } from "@cloudflare/kumo";
+import { Button, Input, InputArea, Select, Switch, useKumoToastManager } from "@cloudflare/kumo";
 import { useLingui } from "@lingui/react/macro";
 import { FloppyDisk } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,9 +19,8 @@ import {
 	updatePluginSettings,
 	type SettingField,
 } from "../lib/api/plugins.js";
-import { ArrowPrev } from "./ArrowIcons.js";
+import { useBreadcrumbLabel } from "./AdminBreadcrumbs.js";
 import { EditorHeader } from "./EditorHeader";
-import { RouterLinkButton } from "./RouterLinkButton.js";
 
 export interface PluginSettingsProps {
 	pluginId: string;
@@ -30,12 +29,13 @@ export interface PluginSettingsProps {
 export function PluginSettings({ pluginId }: PluginSettingsProps) {
 	const { t } = useLingui();
 	const queryClient = useQueryClient();
-	const toastManager = Toast.useToastManager();
+	const toastManager = useKumoToastManager();
 
-	const { data: plugin } = useQuery({
+	const { data: plugin, isLoading: pluginLoading } = useQuery({
 		queryKey: ["plugins", pluginId],
 		queryFn: () => fetchPlugin(pluginId),
 	});
+	useBreadcrumbLabel(plugin?.name ?? (pluginLoading ? undefined : t`Plugin Settings`));
 
 	const {
 		data: settings,
@@ -73,7 +73,7 @@ export function PluginSettings({ pluginId }: PluginSettingsProps) {
 			toastManager.add({
 				title: t`Failed to save settings`,
 				description: err instanceof Error ? err.message : t`An error occurred`,
-				type: "error",
+				variant: "error",
 				timeout: 5000,
 			});
 		},
@@ -110,23 +110,11 @@ export function PluginSettings({ pluginId }: PluginSettingsProps) {
 	};
 
 	const pluginName = plugin?.name ?? pluginId;
-	const backLink = (
-		<RouterLinkButton
-			to="/plugins-manager"
-			variant="ghost"
-			shape="square"
-			aria-label={t`Back to plugins`}
-			icon={<ArrowPrev />}
-		/>
-	);
 
 	if (isLoading) {
 		return (
 			<div className="space-y-6">
-				<div className="flex items-center gap-3">
-					{backLink}
-					<h1 className="text-2xl font-semibold leading-tight">{t`${pluginName} Settings`}</h1>
-				</div>
+				<h1 className="text-2xl font-semibold leading-tight">{t`${pluginName} Settings`}</h1>
 				<div className="rounded-lg border bg-kumo-base p-6">
 					<p className="text-kumo-subtle">{t`Loading settings...`}</p>
 				</div>
@@ -137,10 +125,7 @@ export function PluginSettings({ pluginId }: PluginSettingsProps) {
 	if (error || !settings) {
 		return (
 			<div className="space-y-6">
-				<div className="flex items-center gap-3">
-					{backLink}
-					<h1 className="text-2xl font-semibold leading-tight">{t`${pluginName} Settings`}</h1>
-				</div>
+				<h1 className="text-2xl font-semibold leading-tight">{t`${pluginName} Settings`}</h1>
 				<div className="rounded-lg border bg-kumo-base p-6">
 					<p className="text-kumo-danger">
 						{error instanceof Error ? error.message : t`Failed to load plugin settings`}
@@ -155,7 +140,6 @@ export function PluginSettings({ pluginId }: PluginSettingsProps) {
 	return (
 		<div className="space-y-6">
 			<EditorHeader
-				leading={backLink}
 				actions={
 					<Button
 						type="submit"
@@ -264,6 +248,7 @@ function SettingFieldInput({
 			return (
 				<Input
 					type={field.type}
+					dir="ltr"
 					label={field.label}
 					description={field.description}
 					placeholder={field.placeholder}

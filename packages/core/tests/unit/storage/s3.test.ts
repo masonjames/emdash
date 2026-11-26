@@ -287,6 +287,19 @@ describe("S3Storage.getSignedUploadUrl", () => {
 	});
 });
 
+describe("S3Storage.getClientUploadOrigin", () => {
+	it("names the endpoint origin for path-style signed uploads", () => {
+		const storage = createStorage({
+			endpoint: "https://account.r2.cloudflarestorage.com/",
+			bucket: "my-bucket",
+			accessKeyId: "key",
+			secretAccessKey: "secret",
+		});
+
+		expect(storage.getClientUploadOrigin?.()).toBe("https://account.r2.cloudflarestorage.com");
+	});
+});
+
 describe("S3Storage same-key upload", () => {
 	afterEach(() => s3Send.mockClear());
 

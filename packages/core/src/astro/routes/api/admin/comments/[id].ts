@@ -8,8 +8,10 @@
 import type { APIRoute } from "astro";
 
 import { requirePerm } from "#api/authorize.js";
-import { apiError, handleError, requireDb, unwrapResult } from "#api/error.js";
+import { apiError, handleError, unwrapResult } from "#api/error.js";
 import { handleCommentGet, handleCommentDelete } from "#api/handlers/comments.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
+import { getCommentRouteCacheTags } from "#comments/route-cache.js";
 
 export const prerender = false;
 
@@ -24,8 +26,9 @@ export const GET: APIRoute = async ({ params, locals }) => {
 		return apiError("VALIDATION_ERROR", "Comment ID required", 400);
 	}
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "comments:moderate");
 	if (denied) return denied;
@@ -41,7 +44,7 @@ export const GET: APIRoute = async ({ params, locals }) => {
 /**
  * Hard delete a comment (ADMIN only)
  */
-export const DELETE: APIRoute = async ({ params, locals }) => {
+export const DELETE: APIRoute = async ({ params, locals, cache }) => {
 	const { emdash, user } = locals;
 	const { id } = params;
 
@@ -49,15 +52,21 @@ export const DELETE: APIRoute = async ({ params, locals }) => {
 		return apiError("VALIDATION_ERROR", "Comment ID required", 400);
 	}
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "comments:delete");
 	if (denied) return denied;
 
 	try {
-		const result = await handleCommentDelete(emdash.db, id);
-		return unwrapResult(result);
+		const tags = cache?.enabled ? await getCommentRouteCacheTags(emdash.db, [id], "delete") : [];
+
+		try {
+			return unwrapResult(await handleCommentDelete(emdash.db, id));
+		} finally {
+			if (tags.length > 0) await invalidateRouteCache(cache, tags);
+		}
 	} catch (error) {
 		return handleError(error, "Failed to delete comment", "COMMENT_DELETE_ERROR");
 	}

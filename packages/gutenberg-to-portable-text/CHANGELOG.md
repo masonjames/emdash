@@ -1,5 +1,33 @@
 # @emdash-cms/gutenberg-to-portable-text
 
+## 1.6.0
+
+No changes in this release.
+
+## 1.5.0
+
+### Patch Changes
+
+- [#4602](https://github.com/emdash-cms/emdash/pull/4602) [`73158ea`](https://github.com/emdash-cms/emdash/commit/73158eafddf3689a9a6e03c2d8232b3fcdaee5e3) Thanks [@dmythro](https://github.com/dmythro)! - Fixes classic-editor posts imported from WordPress arriving as one long paragraph. WordPress stores such posts with blank lines between paragraphs and adds the `<p>` tags only when it displays them, so the importer now starts a new paragraph at each blank line, as WordPress shows the post. A single line break stays a line break within its paragraph, including one right after bold, italic or linked text, where the words on either side used to run together.
+
+- [#3846](https://github.com/emdash-cms/emdash/pull/3846) [`0d5c65d`](https://github.com/emdash-cms/emdash/commit/0d5c65d4a1d4cacc553d79e547bb41ca2d98be8d) Thanks [@svermaak](https://github.com/svermaak)! - Fixes Classic-editor code blocks being imported as paragraph text. A `<pre>` element followed later in the post by a `</p>` was matched as a `<p>`, so the code block was dropped and its content ran into the surrounding paragraph. Imported code blocks now also keep the newlines that Classic content writes as `<br>`, and the language from `<pre><code class="language-...">`.
+
+- [#4635](https://github.com/emdash-cms/emdash/pull/4635) [`a499750`](https://github.com/emdash-cms/emdash/commit/a4997505cbf8d38f90168384f8e89b2359189a96) Thanks [@dmythro](https://github.com/dmythro)! - Fixes classic-editor conversion slowing to seconds on HTML with tags that never close, such as a link or image tag with a long run of whitespace or repeated attributes, or many paragraph tags without end tags. Linked images now take their link from the link's own `href` attribute, not from `href` text elsewhere in the tag, and keep an apostrophe in a double-quoted link. Images keep alt text that contains `>`.
+
+## 1.4.0
+
+No changes in this release.
+
+## 1.3.1
+
+No changes in this release.
+
+## 1.3.0
+
+### Patch Changes
+
+- [#4055](https://github.com/emdash-cms/emdash/pull/4055) [`67360d1`](https://github.com/emdash-cms/emdash/commit/67360d1a28a859c30a2891f7bc269f3dbccd3d16) Thanks [@swissky](https://github.com/swissky)! - Fixes WordPress dynamic blocks disappearing on import. Blocks that WordPress renders on the server, such as custom plugin blocks, reusable block references or Latest Posts, store no markup in the post, so the converter dropped them without a trace. They now become an HTML block containing the original block comment, for example `<!-- wp:acme/testimonial {"author":"Jane"} /-->`. The block shows no content on the site. In the admin editor, its HTML tab shows the comment, so editors can see which block was there and rebuild it. Dynamic blocks nested in a container the converter does not know, such as a Query Loop, become one placeholder per inner block, and the container's own settings are not kept.
+
 ## 1.2.0
 
 ### Patch Changes

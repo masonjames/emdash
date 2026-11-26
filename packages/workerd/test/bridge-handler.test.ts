@@ -9,10 +9,14 @@
  * error handling at the bridge level.
  */
 
+import { OptionsRepository } from "emdash";
 import { Kysely, SqliteDialect } from "kysely";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { NodeSqliteCompatDatabase as Database } from "../../core/src/db/node-sqlite-compat.js";
+import { waitForDeferredTasks } from "../../core/src/deferred-tasks.js";
+import { createKVAccess } from "../../core/src/plugins/context.js";
+import { setRoomNotifier } from "../../core/src/rooms/notifications.js";
 import {
 	bytesOverLimit,
 	INVALID_PLUGIN_HTTP_BYTES,
@@ -123,6 +127,7 @@ describe("Bridge Handler Conformance", () => {
 		) => Promise<unknown>;
 		taxonomyWrite?: BridgeHandlerOptions["taxonomyWrite"];
 		contentActions?: BridgeHandlerOptions["contentActions"];
+		storage?: BridgeHandlerOptions["storage"];
 	}) {
 		return createBridgeHandler({
 			pluginId: opts.pluginId ?? "test-plugin",
@@ -137,6 +142,7 @@ describe("Bridge Handler Conformance", () => {
 			commentModerate: opts.commentModerate,
 			taxonomyWrite: opts.taxonomyWrite,
 			contentActions: opts.contentActions,
+			storage: opts.storage,
 		});
 	}
 
@@ -153,6 +159,51 @@ describe("Bridge Handler Conformance", () => {
 		const response = await handler(request);
 		return response.json() as Promise<{ result?: unknown; error?: string }>;
 	}
+
+	it("shares non-settings KV with in-process plugins across mode switches", async () => {
+		const native = createKVAccess(new OptionsRepository(db), "test-plugin");
+		const sandbox = makeHandler({});
+		await native.set("config", { name: "Acme" });
+		expect(await call(sandbox, "kv/get", { key: "config" })).toEqual({ result: { name: "Acme" } });
+		const initial = await native.getVersioned("config");
+		expect(initial).not.toBeNull();
+		expect(await call(sandbox, "kv/getVersioned", { key: "config" })).toEqual({ result: initial });
+		expect(
+			await call(sandbox, "kv/compareAndSet", {
+				key: "config",
+				expectedRevision: initial!.revision,
+				value: { name: "Updated" },
+			}),
+		).toMatchObject({ result: { applied: true } });
+		expect(await native.get("config")).toEqual({ name: "Updated" });
+		expect(
+			await call(sandbox, "kv/compareAndDelete", {
+				key: "config",
+				expectedRevision: initial!.revision,
+			}),
+		).toEqual({ result: { applied: false } });
+		await call(sandbox, "kv/set", { key: "scan", value: false });
+		expect(await native.get("scan")).toBe(false);
+		expect(await call(sandbox, "kv/list", {})).toEqual({ result: await native.list() });
+		await call(sandbox, "kv/set", { key: "prefix_%:literal", value: null });
+		await call(sandbox, "kv/set", { key: "prefixXYZ:other", value: 1 });
+		expect(await call(sandbox, "kv/list", { prefix: "prefix_%" })).toEqual({
+			result: [{ key: "prefix_%:literal", value: null }],
+		});
+		expect(await call(makeHandler({ pluginId: "other" }), "kv/get", { key: "config" })).toEqual({
+			result: null,
+		});
+		const current = await native.getVersioned("config");
+		expect(
+			await call(sandbox, "kv/compareAndDelete", {
+				key: "config",
+				expectedRevision: current!.revision,
+			}),
+		).toEqual({ result: { applied: true } });
+		expect(await native.get("config")).toBeNull();
+		expect(await call(sandbox, "kv/delete", { key: "scan" })).toEqual({ result: true });
+		expect(await native.get("scan")).toBeNull();
+	});
 
 	describe("publication actions", () => {
 		it("routes capability-gated actions through the host callback", async () => {
@@ -262,6 +313,31 @@ describe("Bridge Handler Conformance", () => {
 			});
 			expect(JSON.stringify(infoLog.mock.calls)).toContain("[REDACTED]");
 			expect(JSON.stringify(infoLog.mock.calls)).not.toContain("workerd-secret");
+		});
+
+		it("lists case-sensitive prefixes without bypassing secret observation", async () => {
+			const options = new OptionsRepository(db);
+			await options.set("plugin:test-plugin:settings:apiKey", "list-only-secret");
+			await options.set("plugin:test-plugin:Stats", "upper");
+			await options.set("plugin:test-plugin:stats", "lower");
+			const handler = makeHandler({
+				settingsSchema: { apiKey: { type: "secret", label: "API key" } },
+			});
+
+			expect(await call(handler, "kv/list", { prefix: "S" })).toEqual({
+				result: [{ key: "Stats", value: "upper" }],
+			});
+			expect(await call(handler, "kv/list", { prefix: "Settings:" })).toEqual({ result: [] });
+			expect(await call(handler, "kv/list", { prefix: "s" })).toEqual({
+				result: [
+					{ key: "stats", value: "lower" },
+					{ key: "settings:apiKey", value: "list-only-secret" },
+				],
+			});
+			const infoLog = vi.spyOn(console, "info").mockImplementation(() => undefined);
+			await call(handler, "log", { level: "info", msg: "credential=list-only-secret" });
+			expect(JSON.stringify(infoLog.mock.calls)).not.toContain("list-only-secret");
+			expect(JSON.stringify(infoLog.mock.calls)).toContain("[REDACTED]");
 		});
 
 		it("fails closed without an encryption key and redacts the submitted secret", async () => {
@@ -1419,6 +1495,80 @@ describe("Bridge Handler Conformance", () => {
 			expect(list.items.length).toBeLessThanOrEqual(1);
 		});
 
+		it.each([
+			{ deleted: true, purges: true },
+			{ deleted: false, purges: false },
+		])(
+			"media/delete purges the route cache only when storage delete succeeds ($deleted)",
+			async ({ deleted, purges }) => {
+				await db.schema
+					.createTable("media")
+					.addColumn("id", "text", (col) => col.primaryKey())
+					.addColumn("storage_key", "text", (col) => col.notNull())
+					.addColumn("mime_type", "text", (col) => col.notNull())
+					.execute();
+				await db
+					.insertInto("media" as any)
+					.values({ id: "m-1", storage_key: "photo.png", mime_type: "image/png" })
+					.execute();
+				const storage = {
+					upload: vi.fn(),
+					download: vi.fn(),
+					delete: deleted
+						? vi.fn().mockResolvedValue(undefined)
+						: vi.fn().mockRejectedValue(new Error("bucket unavailable")),
+				};
+				const invalidateMedia = vi.fn().mockResolvedValue(undefined);
+				const handler = makeHandler({
+					capabilities: ["media:write"],
+					storage,
+					// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- media deletes only call invalidateMedia
+					contentActions: () => ({ invalidateMedia }) as any,
+				});
+
+				const result = await call(handler, "media/delete", { id: "m-1", invocationId: "inv-1" });
+
+				expect(result).toEqual({ result: true });
+				expect(storage.delete).toHaveBeenCalledWith("photo.png");
+				if (purges) {
+					expect(invalidateMedia).toHaveBeenCalledWith("test-plugin", "photo.png", "inv-1");
+				} else {
+					expect(invalidateMedia).not.toHaveBeenCalled();
+				}
+			},
+		);
+
+		it("media/delete removes a document without purging the route cache", async () => {
+			await db.schema
+				.createTable("media")
+				.addColumn("id", "text", (col) => col.primaryKey())
+				.addColumn("storage_key", "text", (col) => col.notNull())
+				.addColumn("mime_type", "text", (col) => col.notNull())
+				.execute();
+			await db
+				.insertInto("media" as any)
+				.values({ id: "m-1", storage_key: "report.pdf", mime_type: "application/pdf" })
+				.execute();
+			const storage = {
+				upload: vi.fn(),
+				download: vi.fn(),
+				delete: vi.fn().mockResolvedValue(undefined),
+			};
+			const invalidateMedia = vi.fn().mockResolvedValue(undefined);
+			const handler = makeHandler({
+				capabilities: ["media:write"],
+				storage,
+				// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- media deletes only call invalidateMedia
+				contentActions: () => ({ invalidateMedia }) as any,
+			});
+
+			const result = await call(handler, "media/delete", { id: "m-1", invocationId: "inv-1" });
+
+			expect(result).toEqual({ result: true });
+			expect(storage.delete).toHaveBeenCalledWith("report.pdf");
+			expect(invalidateMedia).not.toHaveBeenCalled();
+		});
+
 		it("media/list defaults a non-number limit", async () => {
 			await db.schema
 				.createTable("media")
@@ -1854,6 +2004,40 @@ describe("Bridge Handler Conformance", () => {
 				.selectAll()
 				.execute();
 			expect(rows).toHaveLength(3);
+		});
+
+		it("contentDeleteMany moves each entry to Trash and notifies its room", async () => {
+			await db
+				.insertInto("ec_atomic_posts" as any)
+				.values([
+					{ id: "p1", slug: "p1" },
+					{ id: "p2", slug: "p2" },
+				])
+				.execute();
+			const notified: string[] = [];
+			setRoomNotifier({ notify: async (roomId) => void notified.push(roomId) });
+			try {
+				const result = await call(
+					makeHandler({ capabilities: ["write:content"] }),
+					"content/deleteMany",
+					{
+						collection: "atomic_posts",
+						ids: ["p1", "p2"],
+					},
+				);
+				expect(result.result).toBe(2);
+				await waitForDeferredTasks();
+			} finally {
+				setRoomNotifier(null);
+			}
+
+			expect(notified).toEqual(["atomic_posts:p1", "atomic_posts:p2"]);
+			const rows = await db
+				.selectFrom("ec_atomic_posts" as any)
+				.select("deleted_at")
+				.where("deleted_at", "is", null)
+				.execute();
+			expect(rows).toEqual([]);
 		});
 	});
 });

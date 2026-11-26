@@ -243,9 +243,8 @@ describe("WordPress migration acceptance (#1691)", () => {
 		expect(importResult.errors).toEqual([]);
 		expect(importResult.imported).toBe(9);
 		expect(importResult.byCollection).toEqual({ post: 5, page: 2, book: 2 });
-		// The wp_block item is unmapped in postTypeMappings (it becomes a
-		// section instead of content).
-		expect(importResult.skipped).toBe(1);
+		// The unmapped wp_block becomes a section, not skipped content.
+		expect(importResult.skipped).toBe(0);
 	});
 
 	it("preserves WordPress slugs so permalinks map 1:1", async () => {
@@ -279,11 +278,12 @@ describe("WordPress migration acceptance (#1691)", () => {
 
 		const draft = await rowBySlug(db, "ec_post", "work-in-progress");
 		expect(draft.status).toBe("draft");
-		expect(draft.published_at).toBeNull();
+		expect(draft.published_at).toBe("2026-02-20T08:00:00.000Z");
 
 		// WP `pending` has no EmDash equivalent and degrades to draft.
 		const pending = await rowBySlug(db, "ec_post", "pending-review");
 		expect(pending.status).toBe("draft");
+		expect(pending.published_at).toBe("2026-02-25T08:00:00.000Z");
 	});
 
 	it("converts Gutenberg blocks to Portable Text", async () => {
@@ -443,8 +443,7 @@ describe("WordPress migration acceptance (#1691)", () => {
 
 		expect(rerun.errors).toEqual([]);
 		expect(rerun.imported).toBe(0);
-		// 9 existing items + the unmapped wp_block.
-		expect(rerun.skipped).toBe(10);
+		expect(rerun.skipped).toBe(9);
 
 		const sectionsRerun = await importReusableBlocksAsSections(wxr.posts, db);
 		expect(sectionsRerun.sectionsCreated).toBe(0);

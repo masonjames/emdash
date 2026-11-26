@@ -9,11 +9,12 @@ import type { APIRoute } from "astro";
 import { z } from "zod";
 
 import { requirePerm } from "#api/authorize.js";
-import { handleError, requireDb, unwrapResult } from "#api/error.js";
+import { apiError, handleError, unwrapResult } from "#api/error.js";
 import { handleMenuCreate, handleMenuGet, handleMenuTranslations } from "#api/handlers/menus.js";
 import { isParseError, parseBody, parseQuery } from "#api/parse.js";
 import { localeFilterQuery } from "#api/schemas.js";
 import { menuTag } from "#cache/chrome-tags.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
 
 export const prerender = false;
 
@@ -28,8 +29,9 @@ export const GET: APIRoute = async ({ params, request, locals }) => {
 	const { emdash, user } = locals;
 	const name = params.name!;
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "menus:read");
 	if (denied) return denied;
@@ -52,8 +54,9 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 	const { emdash, user } = locals;
 	const name = params.name!;
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "menus:manage");
 	if (denied) return denied;
@@ -77,7 +80,7 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 			translationOf: source.data.id,
 		});
 		if (!result.success) return unwrapResult(result, 201);
-		if (cache?.enabled) await cache.invalidate({ tags: [menuTag(name)] });
+		await invalidateRouteCache(cache, [menuTag(name)]);
 		return unwrapResult(result, 201);
 	} catch (error) {
 		return handleError(error, "Failed to create menu translation", "MENU_TRANSLATION_CREATE_ERROR");

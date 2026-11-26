@@ -9,17 +9,23 @@
  * rest still run. Failures are logged but never surface to callers.
  */
 
-import { createKyselyAdapter, type AuthTables } from "@emdash-cms/auth/adapters/kysely";
+import { createKyselyAdapter } from "@emdash-cms/auth/adapters/kysely";
 import type { Kysely } from "kysely";
 
+import { ACCESS_TOKEN_TTL_SECONDS } from "./auth/api-tokens.js";
 import { cleanupExpiredChallenges } from "./auth/challenge-store.js";
 import { MediaRepository } from "./database/repositories/media.js";
 import { RedirectRepository } from "./database/repositories/redirect.js";
 import { RevisionRepository } from "./database/repositories/revision.js";
 import type { Database } from "./database/types.js";
+import { isCacheableMediaKey, mediaCacheTag } from "./media/image-endpoint.js";
 import { removeUploadAttempt } from "./media/upload-attempts.js";
 import { cleanupMediaUsage } from "./media/usage/cleanup.js";
 import type { Storage } from "./storage/types.js";
+import { chunks } from "./utils/chunks.js";
+
+/** Most tags Cloudflare accepts in one purge call. */
+const PURGE_TAG_BATCH = 100;
 
 /**
  * Result of a system cleanup run.
@@ -28,6 +34,9 @@ import type { Storage } from "./storage/types.js";
 export interface CleanupResult {
 	challenges: number;
 	expiredTokens: number;
+	oauthTokens: number;
+	authorizationCodes: number;
+	deviceCodes: number;
 	pendingUploads: number;
 	pendingUploadFiles: number;
 	uploadAttempts: number;
@@ -41,6 +50,13 @@ export interface CleanupResult {
 
 const REVISION_KEEP_COUNT = 50;
 const REVISION_PRUNE_BATCH_SIZE = 10;
+
+/**
+ * Revoking a refresh token finds the access tokens issued from it through its
+ * row, and those can outlive it by one access token lifetime. A device code's
+ * row is what lets a client that is still polling get `expired_token`.
+ */
+const OAUTH_EXPIRY_GRACE_MS = ACCESS_TOKEN_TTL_SECONDS * 1000;
 
 /** Target cadence for full system cleanup. */
 export const SYSTEM_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -78,14 +94,21 @@ export function shouldRunSystemCleanup(currentTime: Date, lastRunAt?: Date | nul
  * @param storage - Optional storage backend for deleting orphaned files.
  *   When omitted, pending upload DB rows are still deleted but the
  *   corresponding files in object storage are not removed.
+ * @param invalidateRouteCache - Purges route cache tags; called with the media
+ *   tags of the stored files this run removed.
  */
 export async function runSystemCleanup(
 	db: Kysely<Database>,
 	storage?: Storage,
+	invalidateRouteCache?: (tags: string[]) => Promise<void>,
 ): Promise<CleanupResult> {
+	const removedKeys: string[] = [];
 	const result: CleanupResult = {
 		challenges: -1,
 		expiredTokens: -1,
+		oauthTokens: -1,
+		authorizationCodes: -1,
+		deviceCodes: -1,
 		pendingUploads: -1,
 		pendingUploadFiles: -1,
 		uploadAttempts: -1,
@@ -104,10 +127,7 @@ export async function runSystemCleanup(
 
 	// 2. Magic link / invite / signup tokens
 	try {
-		// Cast needed: Database extends AuthTables but uses Generated<> wrappers
-		// that confuse structural checks. The adapter casts internally anyway.
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Database uses Generated<> wrappers incompatible with AuthTables structurally; safe at runtime
-		const authAdapter = createKyselyAdapter(db as unknown as Kysely<AuthTables>);
+		const authAdapter = createKyselyAdapter(db);
 		await authAdapter.deleteExpiredTokens();
 		result.expiredTokens = 0; // deleteExpiredTokens returns void
 	} catch (error) {
@@ -128,6 +148,7 @@ export async function runSystemCleanup(
 				try {
 					await storage.delete(key);
 					filesDeleted++;
+					removedKeys.push(key);
 				} catch (error) {
 					// Log per-file failures but continue -- storage.delete is
 					// documented as idempotent, so this is an unexpected error.
@@ -154,12 +175,54 @@ export async function runSystemCleanup(
 			for (const storageKey of storageKeys) {
 				if (await removeUploadAttempt(storage, mediaRepo, storageKey)) {
 					attemptsDeleted++;
+					removedKeys.push(storageKey);
 				}
 			}
 			result.uploadAttempts = attemptsDeleted;
 		}
 	} catch (error) {
 		console.error("[cleanup] Failed to clean media upload attempts:", error);
+	}
+
+	if (invalidateRouteCache) {
+		const tags = removedKeys.filter(isCacheableMediaKey).map(mediaCacheTag);
+		for (const batch of chunks(tags, PURGE_TAG_BATCH)) {
+			try {
+				await invalidateRouteCache(batch);
+			} catch (error) {
+				console.error("[cleanup] Failed to purge removed media from the route cache:", error);
+			}
+		}
+	}
+
+	const oauthCutoff = new Date(Date.now() - OAUTH_EXPIRY_GRACE_MS).toISOString();
+
+	try {
+		const deleted = await db
+			.deleteFrom("_emdash_oauth_tokens")
+			.where("expires_at", "<", oauthCutoff)
+			.executeTakeFirst();
+		result.oauthTokens = Number(deleted.numDeletedRows);
+	} catch (error) {
+		console.error("[cleanup] Failed to clean expired OAuth tokens:", error);
+	}
+
+	try {
+		const { cleanupExpiredAuthorizationCodes } =
+			await import("./api/handlers/oauth-authorization.js");
+		result.authorizationCodes = await cleanupExpiredAuthorizationCodes(db);
+	} catch (error) {
+		console.error("[cleanup] Failed to clean expired authorization codes:", error);
+	}
+
+	try {
+		const deleted = await db
+			.deleteFrom("_emdash_device_codes")
+			.where("expires_at", "<", oauthCutoff)
+			.executeTakeFirst();
+		result.deviceCodes = Number(deleted.numDeletedRows);
+	} catch (error) {
+		console.error("[cleanup] Failed to clean expired device codes:", error);
 	}
 
 	try {

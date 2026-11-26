@@ -4,6 +4,7 @@ import type { Database } from "../../database/types.js";
 import { validateIdentifier } from "../../database/validate.js";
 import { BlockTypeRegistry } from "../../schema/block-type-registry.js";
 import type { BlockType } from "../../schema/block-types.js";
+import { isStoragelessFieldRow } from "../../schema/types.js";
 import { buildCanonicalSha256Fingerprint } from "./projection-fingerprint.js";
 import type { MediaUsageExtractionField, MediaUsageExtractionSubField } from "./types.js";
 import { CONTENT_SOURCE_SCHEMA_VERSION } from "./types.js";
@@ -72,7 +73,7 @@ interface FieldDiscoveryRow {
 }
 
 const DISPLAY_FIELD_SLUGS = ["title", "name"] as const;
-const SUPPORTED_TOP_LEVEL_TYPES = ["file", "image", "portableText"] as const;
+const SUPPORTED_TOP_LEVEL_TYPES = ["file", "image", "portableText", "string", "url"] as const;
 
 type SupportedTopLevelType = (typeof SUPPORTED_TOP_LEVEL_TYPES)[number];
 
@@ -89,7 +90,7 @@ export async function loadContentMediaUsageFields(
 		.select(["_emdash_fields.slug", "_emdash_fields.type", "_emdash_fields.validation"])
 		.where("_emdash_collections.slug", "=", collectionSlug);
 	if (collectionId !== undefined) query = query.where("_emdash_collections.id", "=", collectionId);
-	const rows = await query.execute();
+	const rows = (await query.execute()).filter((row) => !isStoragelessFieldRow(row));
 
 	const extractionFields: ContentMediaUsageField[] = [];
 	const rowBySlug = new Map<string, FieldDiscoveryRow>();
@@ -107,7 +108,7 @@ export async function loadContentMediaUsageFields(
 
 		if (row.type === "repeater") {
 			validateIdentifier(row.slug, "media usage field slug");
-			const subFields = normalizeRepeaterImageSubFields(row.validation);
+			const subFields = normalizeRepeaterMediaSubFields(row.validation);
 			if (subFields.length > 0) {
 				extractionFields.push({
 					slug: row.slug,
@@ -174,7 +175,7 @@ function resolveMediaBlockTypes(
 	});
 }
 
-function normalizeRepeaterImageSubFields(
+function normalizeRepeaterMediaSubFields(
 	rawValidation: string | null,
 ): MediaUsageExtractionSubField[] {
 	const validation = parseValidation(rawValidation, "repeater");
@@ -182,10 +183,12 @@ function normalizeRepeaterImageSubFields(
 
 	const subFields: MediaUsageExtractionSubField[] = [];
 	for (const subField of validation.subFields) {
-		if (!isRecord(subField) || subField.type !== "image") continue;
+		if (!isRecord(subField)) continue;
+		if (subField.type !== "image" && subField.type !== "string" && subField.type !== "url")
+			continue;
 		if (typeof subField.slug !== "string") continue;
 		validateIdentifier(subField.slug, "media usage repeater sub-field slug");
-		subFields.push({ slug: subField.slug, type: "image" });
+		subFields.push({ slug: subField.slug, type: subField.type });
 	}
 
 	return subFields.toSorted((a, b) => a.slug.localeCompare(b.slug));

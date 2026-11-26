@@ -17,7 +17,8 @@ export type MediaUsageReferenceType =
 	| "image_field"
 	| "file_field"
 	| "portable_text_image"
-	| "portable_text_video";
+	| "portable_text_video"
+	| "link";
 
 export interface MediaUsageExtractionSubField {
 	slug: string;
@@ -39,6 +40,7 @@ export interface MediaUsageExtractionField {
 export interface ExtractMediaUsageOccurrencesInput {
 	fields: readonly MediaUsageExtractionField[];
 	data: Record<string, unknown>;
+	siteOrigin?: string;
 }
 
 export interface ExtractedMediaUsageOccurrence {
@@ -51,4 +53,9 @@ export interface ExtractedMediaUsageOccurrence {
 	providerAssetId: string;
 	mediaKind: MediaKind | null;
 	mimeType: string | null;
+	/**
+	 * Set when a local file is named by its URL rather than its media id. The
+	 * occurrence has no media id until the key is matched to a media item.
+	 */
+	storageKey?: string;
 }

@@ -12,7 +12,7 @@
 import type { APIRoute } from "astro";
 
 import { requirePerm } from "#api/authorize.js";
-import { apiError, handleError, requireDb, unwrapResult } from "#api/error.js";
+import { apiError, handleError, unwrapResult } from "#api/error.js";
 import {
 	handleTaxonomyDelete,
 	handleTaxonomyGet,
@@ -21,6 +21,7 @@ import {
 import { isParseError, parseBody, parseQuery } from "#api/parse.js";
 import { localeFilterQuery, updateTaxonomyDefBody } from "#api/schemas.js";
 import { taxonomyTag } from "#cache/chrome-tags.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
 
 export const prerender = false;
 
@@ -32,8 +33,9 @@ export const GET: APIRoute = async ({ params, request, locals }) => {
 	const { name } = params;
 	if (!name) return apiError("VALIDATION_ERROR", "Taxonomy name required", 400);
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "taxonomies:read");
 	if (denied) return denied;
@@ -57,8 +59,9 @@ export const PUT: APIRoute = async ({ params, request, locals, cache }) => {
 	const { name } = params;
 	if (!name) return apiError("VALIDATION_ERROR", "Taxonomy name required", 400);
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "taxonomies:manage");
 	if (denied) return denied;
@@ -75,7 +78,7 @@ export const PUT: APIRoute = async ({ params, request, locals, cache }) => {
 			locale: query.locale,
 		});
 		if (!result.success) return unwrapResult(result);
-		if (cache?.enabled) await cache.invalidate({ tags: [taxonomyTag(name)] });
+		await invalidateRouteCache(cache, [taxonomyTag(name)]);
 		return unwrapResult(result);
 	} catch (error) {
 		return handleError(error, "Failed to update taxonomy", "TAXONOMY_UPDATE_ERROR");
@@ -90,8 +93,9 @@ export const DELETE: APIRoute = async ({ params, locals, cache }) => {
 	const { name } = params;
 	if (!name) return apiError("VALIDATION_ERROR", "Taxonomy name required", 400);
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "taxonomies:manage");
 	if (denied) return denied;
@@ -99,7 +103,7 @@ export const DELETE: APIRoute = async ({ params, locals, cache }) => {
 	try {
 		const result = await handleTaxonomyDelete(emdash.db, name);
 		if (!result.success) return unwrapResult(result);
-		if (cache?.enabled) await cache.invalidate({ tags: [taxonomyTag(name)] });
+		await invalidateRouteCache(cache, [taxonomyTag(name)]);
 		return unwrapResult(result);
 	} catch (error) {
 		return handleError(error, "Failed to delete taxonomy", "TAXONOMY_DELETE_ERROR");

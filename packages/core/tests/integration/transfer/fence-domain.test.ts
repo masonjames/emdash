@@ -1,11 +1,16 @@
+import { sql, type Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { OptionsRepository } from "../../../src/database/repositories/options.js";
+import type { Database } from "../../../src/database/types.js";
+import { MediaUsageCollectionDeletionRepository } from "../../../src/media/usage/collection-deletion.js";
 import { createContentAccessWithWrite } from "../../../src/plugins/context.js";
 import { BlockTypeRegistry } from "../../../src/schema/block-type-registry.js";
 import { SchemaRegistry } from "../../../src/schema/registry.js";
 import { applySeed } from "../../../src/seed/apply.js";
 import { defaultSeed } from "../../../src/seed/default.js";
+import { getSiteSettingsWithDb, setSiteSettings } from "../../../src/settings/index.js";
+import { inspectTargetDomain } from "../../../src/transfer/analyze/target.js";
 import { inspectPortableDomain } from "../../../src/transfer/domain.js";
 import {
 	assertSiteWriteAllowed,
@@ -20,8 +25,43 @@ import {
 	describeEachDialect,
 	setupForDialect,
 	teardownForDialect,
+	type DialectName,
 	type DialectTestContext,
 } from "../../utils/test-db.js";
+
+/**
+ * Installs a trigger (SQLite) or function+trigger (Postgres) that aborts any
+ * update to `_emdash_transfer_operations` that changes `write_epoch`. Used to
+ * simulate the bookkeeping failure path from issue #4040.
+ */
+async function blockWriteEpochUpdates(dialect: DialectName, db: Kysely<Database>): Promise<void> {
+	if (dialect === "postgres") {
+		await sql`
+			CREATE OR REPLACE FUNCTION block_write_epoch() RETURNS trigger AS $$
+			BEGIN
+				IF NEW.write_epoch IS DISTINCT FROM OLD.write_epoch THEN
+					RAISE EXCEPTION 'write_epoch update blocked';
+				END IF;
+				RETURN NEW;
+			END;
+			$$ LANGUAGE plpgsql
+		`.execute(db);
+		await sql`
+			CREATE TRIGGER block_write_epoch
+			BEFORE UPDATE ON _emdash_transfer_operations
+			FOR EACH ROW EXECUTE FUNCTION block_write_epoch()
+		`.execute(db);
+	} else {
+		await sql`
+			CREATE TRIGGER block_write_epoch
+			BEFORE UPDATE ON _emdash_transfer_operations
+			WHEN NEW.write_epoch != OLD.write_epoch
+			BEGIN
+				SELECT RAISE(ABORT, 'write_epoch update blocked');
+			END
+		`.execute(db);
+	}
+}
 
 describeEachDialect("transfer fence, domain, and site id", (dialect) => {
 	let ctx: DialectTestContext;
@@ -192,6 +232,55 @@ describeEachDialect("transfer fence, domain, and site id", (dialect) => {
 			await content.create("posts", { title: "Hello" });
 			expect((await repo.require(operation.id)).writeEpoch).toBe(1);
 		});
+
+		it("records a site settings update for running exports atomically", async () => {
+			const repo = new TransferOperationRepository(ctx.db);
+			const { operation } = await repo.create({ kind: "export", createdBy: "u1" });
+			await ctx.db
+				.updateTable("_emdash_transfer_operations")
+				.set({ state: "running" })
+				.where("id", "=", operation.id)
+				.execute();
+
+			await setSiteSettings({ title: "Updated title" }, ctx.db);
+
+			expect((await repo.require(operation.id)).writeEpoch).toBe(1);
+			const settings = await getSiteSettingsWithDb(ctx.db);
+			expect(settings.title).toBe("Updated title");
+		});
+
+		it("rolls back a site settings update that cannot record the export epoch", async () => {
+			const repo = new TransferOperationRepository(ctx.db);
+			const { operation } = await repo.create({ kind: "export", createdBy: "u1" });
+			await ctx.db
+				.updateTable("_emdash_transfer_operations")
+				.set({ state: "running" })
+				.where("id", "=", operation.id)
+				.execute();
+
+			await setSiteSettings({ title: "Before" }, ctx.db);
+			await blockWriteEpochUpdates(ctx.dialect, ctx.db);
+
+			await expect(setSiteSettings({ title: "After" }, ctx.db)).rejects.toThrow();
+
+			const settings = await getSiteSettingsWithDb(ctx.db);
+			expect(settings.title).toBe("Before");
+			expect((await repo.require(operation.id)).writeEpoch).toBe(1);
+		});
+
+		it("does not bump the export epoch for a no-op settings update", async () => {
+			const repo = new TransferOperationRepository(ctx.db);
+			const { operation } = await repo.create({ kind: "export", createdBy: "u1" });
+			await ctx.db
+				.updateTable("_emdash_transfer_operations")
+				.set({ state: "running" })
+				.where("id", "=", operation.id)
+				.execute();
+
+			await setSiteSettings({ title: undefined, tagline: undefined }, ctx.db);
+
+			expect((await repo.require(operation.id)).writeEpoch).toBe(0);
+		});
 	});
 
 	describe("inspectPortableDomain", () => {
@@ -212,6 +301,43 @@ describeEachDialect("transfer fence, domain, and site id", (dialect) => {
 			expect(
 				defs.flatMap((item) => (item.type === "taxonomy_def" ? [item.name] : [])).toSorted(),
 			).toEqual(["category", "tag"]);
+		});
+
+		it("blocks analysis for a failed collection deletion, even without a registry row", async () => {
+			const state = "failed";
+			await seedDefault();
+			await new MediaUsageCollectionDeletionRepository(ctx.db).createTombstone({
+				collectionId: "deleted-collection",
+				collectionSlug: "old_posts",
+				forceDelete: false,
+			});
+			await ctx.db
+				.updateTable("_emdash_media_usage_collection_deletions")
+				.set({ state, phase: "sources" })
+				.where("collection_id", "=", "deleted-collection")
+				.execute();
+
+			const result = await inspectPortableDomain(ctx.db);
+			expect(result.empty).toBe(false);
+			expect(result.blockers).toContainEqual({
+				code: "collection_deletion_unfinished",
+				id: "deleted-collection",
+				slug: "old_posts",
+				state,
+				phase: "sources",
+			});
+			const target = await inspectTargetDomain(ctx.db, ["posts"]);
+			expect(target.blockers).toContainEqual(
+				expect.objectContaining({
+					code: "target_not_empty",
+					detail: {
+						reason: "collection_deletion_unfinished",
+						collection: "old_posts",
+						state,
+						phase: "sources",
+					},
+				}),
+			);
 		});
 
 		it("treats theme sections, menus, widgets, and unassigned terms as scaffold", async () => {

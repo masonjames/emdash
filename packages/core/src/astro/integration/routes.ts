@@ -44,6 +44,7 @@ type InjectRoute = (route: { pattern: string; entrypoint: string }) => void;
 
 interface InjectCoreRoutesOptions {
 	srcDir?: URL;
+	cloudflareDevScheduler?: boolean;
 }
 
 const ROUTE_OVERRIDE_EXTENSIONS = [
@@ -160,6 +161,11 @@ export function injectCoreRoutes(
 	});
 
 	injectRoute({
+		pattern: "/_emdash/api/content/[collection]/[id]/revisions/editors",
+		entrypoint: resolveRoute("api/content/[collection]/[id]/revisions/editors.ts"),
+	});
+
+	injectRoute({
 		pattern: "/_emdash/api/content/[collection]/[id]/preview-url",
 		entrypoint: resolveRoute("api/content/[collection]/[id]/preview-url.ts"),
 	});
@@ -215,6 +221,11 @@ export function injectCoreRoutes(
 	injectRoute({
 		pattern: "/_emdash/api/content/[collection]/[id]/lock",
 		entrypoint: resolveRoute("api/content/[collection]/[id]/lock.ts"),
+	});
+
+	injectRoute({
+		pattern: "/_emdash/api/content/[collection]/[id]/room",
+		entrypoint: resolveRoute("api/content/[collection]/[id]/room.ts"),
 	});
 
 	// i18n translation routes
@@ -1091,6 +1102,11 @@ export function injectCoreRoutes(
 	});
 
 	injectRoute({
+		pattern: "/_emdash/api/auth/dev-bypass",
+		entrypoint: resolveRoute("api/auth/dev-bypass.ts"),
+	});
+
+	injectRoute({
 		pattern: "/_emdash/api/setup/dev-reset",
 		entrypoint: resolveRoute("api/setup/dev-reset.ts"),
 	});
@@ -1099,6 +1115,13 @@ export function injectCoreRoutes(
 		pattern: "/_emdash/api/dev/emails",
 		entrypoint: resolveRoute("api/dev/emails.ts"),
 	});
+
+	if (options.cloudflareDevScheduler) {
+		injectRoute({
+			pattern: "/_emdash/api/dev/scheduled-tasks",
+			entrypoint: resolveRoute("api/dev/scheduled-tasks.ts"),
+		});
+	}
 
 	// Current user endpoint (always available)
 	injectRoute({
@@ -1183,11 +1206,6 @@ export function injectBuiltinAuthRoutes(injectRoute: InjectRoute): void {
 		entrypoint: resolveRoute("api/auth/passkey/[id].ts"),
 	});
 
-	injectRoute({
-		pattern: "/_emdash/api/auth/dev-bypass",
-		entrypoint: resolveRoute("api/auth/dev-bypass.ts"),
-	});
-
 	// Invite routes
 	injectRoute({
 		pattern: "/_emdash/api/auth/invite",
@@ -1247,6 +1265,10 @@ export function injectBuiltinAuthRoutes(injectRoute: InjectRoute): void {
 		entrypoint: resolveRoute("api/auth/signup/verify.ts"),
 	});
 
+	injectRoute({
+		pattern: "/_emdash/api/auth/signup/register-options",
+		entrypoint: resolveRoute("api/auth/signup/register-options.ts"),
+	});
 	injectRoute({
 		pattern: "/_emdash/api/auth/signup/complete",
 		entrypoint: resolveRoute("api/auth/signup/complete.ts"),

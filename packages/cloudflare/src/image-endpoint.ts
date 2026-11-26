@@ -13,10 +13,16 @@
 // @astrojs/cloudflare's binding-mode transform endpoint; resolved in the consumer.
 import { GET as adapterGET } from "@astrojs/cloudflare/image-transform-endpoint";
 import type { APIRoute } from "astro";
+// @ts-ignore - astro:assets is resolved by the consumer's Astro build
+import { imageConfig } from "astro:assets";
 import { env } from "cloudflare:workers";
 import type { Storage } from "emdash";
 import {
+	cacheMediaResponse,
+	canonicalTransformRedirect,
+	canonicalTransformSearch,
 	getTransformFingerprint,
+	isCacheableMediaSource,
 	isHeicMedia,
 	matchInternalMediaKey,
 	MUTABLE_MEDIA_CACHE_CONTROL,
@@ -27,6 +33,8 @@ import {
 	isNotModified,
 	type ImageTransformFormat,
 } from "emdash/media/image-endpoint";
+// @ts-ignore - virtual module resolved by the consumer's Astro build
+import virtualConfig from "virtual:emdash/config";
 
 export const prerender = false;
 
@@ -59,10 +67,16 @@ function streamOriginal(
 	});
 }
 
-function notModifiedResponse(size: number, lastModified?: Date, suffix?: string): Response {
+function notModifiedResponse(
+	contentType: string,
+	size: number,
+	lastModified?: Date,
+	suffix?: string,
+): Response {
 	return new Response(null, {
 		status: 304,
 		headers: {
+			"Content-Type": contentType,
 			"Cache-Control": MUTABLE_MEDIA_CACHE_CONTROL,
 			"X-Content-Type-Options": "nosniff",
 			...validatorHeaders(size, lastModified, suffix),
@@ -90,18 +104,42 @@ export const GET: APIRoute = async (ctx) => {
 	if (!key || !storage) return adapterGET(ctx);
 	let transformingHeic = false;
 
+	// Astro adds the adapter's assetQueryParams; the public `astro:assets` type omits it.
+	const config: typeof imageConfig & { assetQueryParams?: URLSearchParams } = imageConfig;
+	const stockService = config.service.entrypoint === "@astrojs/cloudflare/image-service-workerd";
+	if (stockService) {
+		const canonical = canonicalTransformSearch(url, config.assetQueryParams);
+		if (canonical !== null) return canonicalTransformRedirect(url, canonical);
+	}
+
+	// An unread download keeps its storage read open even for a bodyless response.
+	let unusedBody: ReadableStream<Uint8Array> | undefined;
+	const serveOriginal = (source: {
+		body: ReadableStream<Uint8Array>;
+		contentType: string;
+		size: number;
+		lastModified?: Date;
+	}): Response => {
+		if (isNotModified(ctx.request, source.size, source.lastModified)) {
+			return notModifiedResponse(source.contentType, source.size, source.lastModified);
+		}
+		if (ctx.request.method === "HEAD") {
+			return new Response(null, {
+				status: 200,
+				headers: originalMediaHeaders(source.contentType, source.size, source.lastModified),
+			});
+		}
+		unusedBody = undefined;
+		return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
+	};
+
 	try {
 		const source = await storage.download(key);
+		unusedBody = source.body;
 		transformingHeic = isHeicMedia(source.contentType, key);
 
 		// Only raster images are transformable; serve anything else unchanged.
-		if (!source.contentType.startsWith("image/")) {
-			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				await source.body.cancel().catch(() => undefined);
-				return notModifiedResponse(source.size, source.lastModified);
-			}
-			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
-		}
+		if (!source.contentType.startsWith("image/")) return serveOriginal(source);
 
 		const images = resolveImagesBinding();
 		const parsed = parseTransformParams(url.searchParams);
@@ -113,17 +151,12 @@ export const GET: APIRoute = async (ctx) => {
 					status: 415,
 				});
 			}
-			if (isNotModified(ctx.request, source.size, source.lastModified)) {
-				await source.body.cancel().catch(() => undefined);
-				return notModifiedResponse(source.size, source.lastModified);
-			}
-			return streamOriginal(source.body, source.contentType, source.size, source.lastModified);
+			return serveOriginal(source);
 		}
 
 		const fingerprint = getTransformFingerprint(url.searchParams);
 		if (isNotModified(ctx.request, source.size, source.lastModified, fingerprint)) {
-			await source.body.cancel().catch(() => undefined);
-			return notModifiedResponse(source.size, source.lastModified, fingerprint);
+			return notModifiedResponse(source.contentType, source.size, source.lastModified, fingerprint);
 		}
 
 		const { width, height, format, quality } = parsed.options;
@@ -141,9 +174,17 @@ export const GET: APIRoute = async (ctx) => {
 		if (effectiveQuality !== undefined) output.quality = effectiveQuality;
 
 		const result = await images.input(source.body).transform(transform).output(output);
+		unusedBody = undefined;
 		const response = result.response();
 		if (!response.body) return new Response(null, { status: 500 });
 
+		if (
+			stockService &&
+			virtualConfig?.routeCacheProvider !== "memory" &&
+			isCacheableMediaSource(url.searchParams.get("href"), url)
+		) {
+			cacheMediaResponse(ctx.cache, key);
+		}
 		return new Response(response.body, {
 			status: 200,
 			headers: {
@@ -162,5 +203,7 @@ export const GET: APIRoute = async (ctx) => {
 		}
 		console.error("[emdash] image transform failed:", error);
 		return new Response("Internal Server Error", { status: 500 });
+	} finally {
+		if (unusedBody && !unusedBody.locked) await unusedBody.cancel().catch(() => undefined);
 	}
 };

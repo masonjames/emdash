@@ -84,6 +84,13 @@ export const LOCALES: LocaleDefinition[] = [
 		enabled: true,
 		dateLocale: () => import("react-day-picker/locale/zh-TW").then((m) => m.zhTW),
 	},
+	// Croatian
+	{
+		code: "hr",
+		label: "Hrvatski",
+		enabled: true,
+		dateLocale: () => import("react-day-picker/locale/hr").then((m) => m.hr),
+	},
 	// Czech
 	{
 		code: "cs",
@@ -170,6 +177,13 @@ export const LOCALES: LocaleDefinition[] = [
 		enabled: true,
 		dateLocale: () => import("react-day-picker/locale/id").then((m) => m.id),
 	},
+	// Italian
+	{
+		code: "it",
+		label: "Italiano",
+		enabled: true,
+		dateLocale: () => import("react-day-picker/locale/it").then((m) => m.it),
+	},
 	// Japanese
 	{
 		code: "ja",
@@ -183,6 +197,13 @@ export const LOCALES: LocaleDefinition[] = [
 		label: "한국어",
 		enabled: false,
 		dateLocale: () => import("react-day-picker/locale/ko").then((m) => m.ko),
+	},
+	// Lithuanian
+	{
+		code: "lt",
+		label: "Lietuvių",
+		enabled: true,
+		dateLocale: () => import("react-day-picker/locale/lt").then((m) => m.lt),
 	},
 	// Norwegian Bokmål
 	{
@@ -211,6 +232,13 @@ export const LOCALES: LocaleDefinition[] = [
 		label: "Português (Portugal)",
 		enabled: true,
 		dateLocale: () => import("react-day-picker/locale/pt").then((m) => m.pt),
+	},
+	// Russian
+	{
+		code: "ru",
+		label: "Русский",
+		enabled: true,
+		dateLocale: () => import("react-day-picker/locale/ru").then((m) => m.ru),
 	},
 	// Serbian (Latin script)
 	{
@@ -260,6 +288,13 @@ export const LOCALES: LocaleDefinition[] = [
 		label: "Українська",
 		enabled: true,
 		dateLocale: () => import("react-day-picker/locale/uk").then((m) => m.uk),
+	},
+	// Vietnamese
+	{
+		code: "vi",
+		label: "Tiếng Việt",
+		enabled: true,
+		dateLocale: () => import("react-day-picker/locale/vi").then((m) => m.vi),
 	},
 	// Pseudo-locale for i18n testing - never enabled in the admin UI by default.
 	// Set EMDASH_PSEUDO_LOCALE=1 in .env to expose it in the locale switcher (dev only).

@@ -19,13 +19,12 @@ import { useHotkeys } from "react-hotkeys-hook";
 
 import { apiFetch, type AdminManifest } from "../lib/api/client.js";
 import { useCurrentUser } from "../lib/api/current-user";
+import { ADMIN_NAV_ICONS, getCollectionNavIcon, resolveNavIcon } from "./admin-navigation-icons.js";
 import {
-	ADMIN_NAV_ICONS,
-	getCollectionNavIcon,
-	getTaxonomyNavIcon,
-	resolveNavIcon,
-} from "./admin-navigation-icons.js";
-import { resolvePluginPageLabel, visibleCollectionEntries } from "./Sidebar.js";
+	declaredLabelTranslator,
+	resolvePluginPageLabel,
+	visibleCollectionEntries,
+} from "./Sidebar.js";
 
 /** Subset of manifest fields used by the palette (matches `Shell` props shape). */
 type CommandPaletteManifest = {
@@ -34,6 +33,7 @@ type CommandPaletteManifest = {
 		{ label: string; labelSingular?: string; icon?: string; hidden?: boolean }
 	>;
 	plugins: AdminManifest["plugins"];
+	admin?: { hiddenNavItems?: string[] };
 };
 
 // Role levels (matching @emdash-cms/auth)
@@ -205,7 +205,7 @@ export function buildNavItems(
 			title: msg`Categories`,
 			to: "/taxonomies/$taxonomy",
 			params: { taxonomy: "category" },
-			icon: getTaxonomyNavIcon("category"),
+			icon: ADMIN_NAV_ICONS.taxonomy,
 			minRole: ROLE_EDITOR,
 			keywords: ["taxonomy"],
 		},
@@ -214,7 +214,7 @@ export function buildNavItems(
 			title: msg`Tags`,
 			to: "/taxonomies/$taxonomy",
 			params: { taxonomy: "tag" },
-			icon: getTaxonomyNavIcon("tag"),
+			icon: ADMIN_NAV_ICONS.tags,
 			minRole: ROLE_EDITOR,
 			keywords: ["taxonomy"],
 		},
@@ -274,8 +274,8 @@ export function buildNavItems(
 		if (config.adminPages && config.adminPages.length > 0) {
 			for (const page of config.adminPages) {
 				if (!isSafePluginPagePath(page.path)) continue;
-				// Same treatment as the sidebar: declared labels go through the
-				// shared i18n instance so plugin catalogs can localize them.
+				// Plugin page labels are translated only when the catalog has
+				// an entry for them; otherwise they render as declared.
 				const label = resolvePluginPageLabel(page.label, pluginId, translateLabel);
 
 				items.push({
@@ -289,8 +289,10 @@ export function buildNavItems(
 		}
 	}
 
-	// Filter by role
-	return items.filter((item) => !item.minRole || userRole >= item.minRole);
+	const hidden = manifest.admin?.hiddenNavItems ?? [];
+	return items.filter(
+		(item) => (!item.minRole || userRole >= item.minRole) && !hidden.includes(item.id),
+	);
 }
 
 function filterNavItems(
@@ -341,8 +343,8 @@ export function AdminCommandPalette({ manifest }: AdminCommandPaletteProps) {
 
 	// Build navigation items
 	const allNavItems = React.useMemo(
-		() => buildNavItems(manifest, userRole, translateDynamic),
-		[manifest, userRole, translateDynamic, i18n.locale],
+		() => buildNavItems(manifest, userRole, declaredLabelTranslator(i18n, translateDynamic)),
+		[manifest, userRole, translateDynamic, i18n, i18n.locale],
 	);
 
 	// Filter nav items based on query

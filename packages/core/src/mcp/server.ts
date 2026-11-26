@@ -31,14 +31,22 @@ import {
 } from "#api/schemas.js";
 
 import { after } from "../after.js";
+import { entryEditAccess } from "../api/authorize.js";
 import { claimEntryLockForWrite } from "../api/handlers/entry-lock.js";
 import type { MediaUsageRepairRequest } from "../api/schemas/media-usage.js";
 import type { EmDashHandlers } from "../astro/types.js";
 import { hasScope } from "../auth/api-tokens.js";
 import { menuTag, siteSettingsTag, taxonomyTag } from "../cache/chrome-tags.js";
+import { invalidateRouteCache } from "../cache/route-cache.js";
 import { convertDataForRead, convertDataForWrite } from "../client/portable-text.js";
 import type { FieldSchema } from "../client/portable-text.js";
-import { decodeCursor, InvalidCursorError } from "../database/repositories/types.js";
+import {
+	type ContentItem,
+	decodeCursor,
+	InvalidCursorError,
+} from "../database/repositories/types.js";
+import { resolveConfiguredLocale } from "../i18n/config.js";
+import { isRouteCachedMedia, mediaCacheTag } from "../media/image-endpoint.js";
 import type { RouteCallerInput } from "../plugins/routes.js";
 import {
 	TRANSFER_SCOPES,
@@ -49,6 +57,7 @@ import { readSiteWriteFence, recordSiteWrite } from "../transfer/fence.js";
 import { toSha256Digest } from "../transfer/format/digest.js";
 import { siteImportDecisionsInputSchema } from "../transfer/format/plan.js";
 import { decodeBase64, encodeBase64 } from "../utils/base64.js";
+import { pluginToolName } from "./plugin-tool-name.js";
 import {
 	analyzeImport,
 	exportStatus,
@@ -176,7 +185,17 @@ const settingsSeoSchema = z.object({
 		.string()
 		.max(5000)
 		.optional()
-		.describe("Custom robots.txt body. Leave unset for the EmDash default."),
+		.describe(
+			"Custom robots.txt body. Leave unset for the EmDash default. Changes are rejected " +
+				"when the site serves its own src/pages/robots.txt.",
+		),
+	disallowAiTraining: z
+		.boolean()
+		.optional()
+		.describe(
+			"Add robots.txt rules asking AI crawlers not to use the site for training. " +
+				"Changes are rejected when the site serves its own src/pages/robots.txt.",
+		),
 	googleVerification: z
 		.string()
 		.max(100)
@@ -263,7 +282,7 @@ const schemaUpdateCollectionToolSchema = z.object({
 		"Field slug to use as the Title column in admin lists; pass null to fall back to the default",
 	),
 	dateField: updateCollectionBody.shape.dateField.describe(
-		"Datetime field slug to use as the Date column in admin lists; pass null to fall back to the default",
+		"Datetime field slug or system timestamp (publishedAt, createdAt, updatedAt) to use as the Date column and default sort in admin lists; pass null to fall back to last-updated",
 	),
 });
 
@@ -553,6 +572,14 @@ function isPublished(t: unknown): boolean {
 	);
 }
 
+function isEntry(t: unknown, idOrSlug: string): boolean {
+	return (
+		typeof t === "object" &&
+		t !== null &&
+		(("id" in t && t.id === idOrSlug) || ("slug" in t && t.slug === idOrSlug))
+	);
+}
+
 function getExtra(extra: { authInfo?: { extra?: Record<string, unknown> } }): EmDashExtra {
 	const payload = extra.authInfo?.extra as EmDashExtra | undefined;
 	if (!payload?.emdash) {
@@ -577,8 +604,7 @@ async function unwrapAndInvalidate(
 	changedEarlier = false,
 ): Promise<SuccessEnvelope | ErrorEnvelope> {
 	if (result.success || changedEarlier) {
-		const { cache } = getExtra(extra);
-		if (cache?.enabled) await cache.invalidate({ tags });
+		await invalidateRouteCache(getExtra(extra).cache, tags);
 	}
 	return unwrap(result);
 }
@@ -621,7 +647,7 @@ async function convertWriteData(
 async function applyReadMarkdown(
 	ec: EmDashHandlers,
 	collection: string,
-	items: Array<Record<string, unknown>>,
+	items: Array<{ data?: unknown }>,
 ): Promise<void> {
 	const fields = await getCollectionFields(ec, collection);
 	if (!fields) return;
@@ -828,11 +854,42 @@ async function refuseLockedEntry(
 	return refusal ? respondError(refusal.code, refusal.message, { ...refusal.details }) : null;
 }
 
+/** Extract the status from a content handler response. */
+function extractContentStatus(data: unknown): unknown {
+	if (!data || typeof data !== "object") return undefined;
+	const obj = data as Record<string, unknown>;
+	const item =
+		obj.item && typeof obj.item === "object" ? (obj.item as Record<string, unknown>) : obj;
+	return item?.status;
+}
+
 /** Extract the `_rev` token from a content handler response. */
 function extractContentRev(data: unknown): string | undefined {
 	if (!data || typeof data !== "object") return undefined;
 	const rev = (data as Record<string, unknown>)._rev;
 	return typeof rev === "string" ? rev : undefined;
+}
+
+/**
+ * The publish or unpublish `content_update` chains after saving fields. When it conflicts, the
+ * fields stay saved, so the error says so and names the `_rev` they saved.
+ */
+function afterSavedFields(
+	result: HandlerResult,
+	savedRev: string | undefined,
+	step: "publish" | "unpublish",
+): HandlerResult {
+	const error = result.error as { code?: unknown; message?: unknown } | undefined;
+	if (result.success || savedRev === undefined || error?.code !== "CONFLICT") return result;
+	const reason = typeof error.message === "string" ? `: ${error.message}` : "";
+	return {
+		success: false,
+		error: {
+			code: "CONFLICT",
+			message: `The fields were saved, but the ${step} conflicted${reason}`,
+			details: { _rev: savedRev },
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -905,10 +962,19 @@ export function createMcpServer(
 		)(name, config, wrapped);
 	}) as typeof server.registerTool;
 
+	const registeredPluginNames = new Set<string>();
 	for (const tool of pluginTools) {
 		if (!Object.hasOwn(Permissions, tool.permission)) continue;
+		const name = pluginToolName(tool.pluginId, tool.name);
+		if (registeredPluginNames.has(name)) {
+			console.warn(
+				`[emdash] Skipping duplicate MCP tool name ${name} from ${tool.pluginId}/${tool.name}`,
+			);
+			continue;
+		}
+		registeredPluginNames.add(name);
 		server.registerTool(
-			`${tool.pluginId}__${tool.name}`,
+			name,
 			{
 				description: tool.description,
 				inputSchema: tool.inputSchema,
@@ -1094,31 +1160,26 @@ export function createMcpServer(
 			requireScope(extra, "content:read");
 			const ec = getEmDash(extra);
 			const result = await ec.handleContentGet(args.collection, args.id, args.locale);
+			if (!result.success) return unwrap(result);
+			let item: Omit<ContentItem, "liveData" | "draftRevisionId"> = result.data.item;
 			// Hide non-published items from users without draft access. Return a
 			// not-found error so subscribers can't enumerate draft IDs by status.
-			if (result.success && !canReadDrafts(extra)) {
-				const data =
-					result.data && typeof result.data === "object"
-						? // eslint-disable-next-line typescript/no-unsafe-type-assertion -- handler returns unknown data; narrowed by typeof check
-							(result.data as Record<string, unknown>)
-						: undefined;
-				const item =
-					data?.item && typeof data.item === "object"
-						? // eslint-disable-next-line typescript/no-unsafe-type-assertion -- narrowed by typeof check
-							(data.item as Record<string, unknown>)
-						: undefined;
-				const status = typeof item?.status === "string" ? item.status : null;
-				if (status !== "published") {
+			if (!canReadDrafts(extra)) {
+				const { liveData, draftRevisionId: _draftRevisionId, ...published } = result.data.item;
+				if (published.status !== "published") {
 					return unwrap({
 						success: false,
 						error: { code: "NOT_FOUND", message: `Content item not found: ${args.id}` },
 					});
 				}
+				// handleContentGet overlays the draft revision onto item.data and
+				// moves the published values to item.liveData.
+				item = { ...published, data: liveData ?? published.data };
 			}
-			if (result.success && args.markdown && result.data?.item) {
-				await applyReadMarkdown(ec, args.collection, [result.data.item]);
+			if (args.markdown) {
+				await applyReadMarkdown(ec, args.collection, [item]);
 			}
-			return unwrap(result);
+			return unwrap({ success: true, data: { ...result.data, item } });
 		},
 	);
 
@@ -1134,7 +1195,8 @@ export function createMcpServer(
 				"this. Pass a Portable Text JSON array only for complex content Markdown " +
 				"can't express (custom blocks, embeds). A slug is auto-generated if not " +
 				"provided. Items are created as 'draft' by default — use content_publish " +
-				"to make them live.",
+				"or pass status='published' to make them live. `seo` and `publishedAt` " +
+				"can be set in the same call; `publishedAt` requires content:publish_any.",
 			inputSchema: z.object({
 				collection: z.string().describe("Collection slug (e.g. 'posts', 'pages')"),
 				data: z
@@ -1175,6 +1237,18 @@ export function createMcpServer(
 					.describe(
 						"Taxonomy term assignments as { taxonomyName: [termSlug, ...] }. Term slugs are resolved in the entry's locale. Call taxonomy_list to see available taxonomies and taxonomy_list_terms to look up slugs. Missing keys leave that taxonomy unchanged.",
 					),
+				// Reuse the REST schema so `canonical` is gated through `httpUrl`,
+				// rejecting javascript:/data: URIs that would become stored XSS.
+				seo: contentSeoInput
+					.optional()
+					.describe(
+						"Per-content SEO metadata. Only valid for collections with SEO enabled (see schema_get_collection.hasSeo).",
+					),
+				publishedAt: contentDateTimeInputSchema
+					.nullish()
+					.describe(
+						"Override the publication timestamp (ISO 8601). Requires content:publish_any permission. Useful for content migrations.",
+					),
 			}),
 			annotations: { destructiveHint: false },
 		},
@@ -1183,6 +1257,19 @@ export function createMcpServer(
 			requireRole(extra, Role.CONTRIBUTOR);
 			const { emdash, userId, userRole } = getExtra(extra);
 			const actor = { id: userId, role: userRole };
+
+			// Writing publishedAt directly (including clearing to null) overwrites
+			// historical record — gate behind publish_any, mirroring the REST POST
+			// route and the MCP content_update tool.
+			if (args.publishedAt !== undefined) {
+				const user = { id: userId, role: userRole };
+				if (!hasPermission(user, "content:publish_any")) {
+					throw new EmDashAuthError(
+						"Setting publishedAt requires content:publish_any permission",
+						"INSUFFICIENT_PERMISSIONS",
+					);
+				}
+			}
 
 			// Creating a translation requires edit permission on the source item
 			if (args.translationOf) {
@@ -1217,6 +1304,8 @@ export function createMcpServer(
 					taxonomies: args.taxonomies,
 					migrateBlocks: args.migrateBlocks,
 					replaceBlocks: args.replaceBlocks,
+					seo: args.seo,
+					publishedAt: args.publishedAt,
 					actor,
 				});
 				if (!result.success) return unwrap(result);
@@ -1225,6 +1314,7 @@ export function createMcpServer(
 					return unwrapAndInvalidate(
 						extra,
 						await emdash.handleContentPublish(args.collection, itemId, {
+							publishedAt: args.publishedAt ?? undefined,
 							actor: { ...actor, source: "mcp" },
 							origin: { source: "mcp" },
 						}),
@@ -1232,11 +1322,10 @@ export function createMcpServer(
 						true,
 					);
 				}
-				return unwrapAndInvalidate(extra, result, [args.collection]);
+				return unwrap(result);
 			}
 
-			return unwrapAndInvalidate(
-				extra,
+			return unwrap(
 				await emdash.handleContentCreate(args.collection, {
 					data,
 					slug: args.slug,
@@ -1247,9 +1336,10 @@ export function createMcpServer(
 					taxonomies: args.taxonomies,
 					migrateBlocks: args.migrateBlocks,
 					replaceBlocks: args.replaceBlocks,
+					seo: args.seo,
+					publishedAt: args.publishedAt,
 					actor,
 				}),
-				[args.collection],
 			);
 		},
 	);
@@ -1333,7 +1423,7 @@ export function createMcpServer(
 		},
 		async (args, extra) => {
 			requireScope(extra, "content:write");
-			requireRole(extra, Role.AUTHOR);
+			requireRole(extra, Role.CONTRIBUTOR);
 			const { emdash, userId, userRole } = getExtra(extra);
 			const actor = { id: userId, role: userRole };
 
@@ -1343,7 +1433,17 @@ export function createMcpServer(
 				return unwrap(existing);
 			}
 			const ownerId = extractContentAuthorId(existing.data);
-			requireOwnership(extra, ownerId, "content:edit_own", "content:edit_any");
+			if (
+				!entryEditAccess(
+					{ id: userId, role: userRole },
+					{ authorId: ownerId, status: extractContentStatus(existing.data) },
+				)
+			) {
+				throw new EmDashAuthError(
+					"Insufficient permissions for this operation",
+					"INSUFFICIENT_PERMISSIONS",
+				);
+			}
 
 			const data = args.data
 				? await convertWriteData(emdash, args.collection, args.data)
@@ -1374,6 +1474,7 @@ export function createMcpServer(
 			// Status transitions route through dedicated handlers for proper revision management
 			if (args.status === "published") {
 				let rev: string | undefined = args._rev;
+				let savedRev: string | undefined;
 				let liveChanged = false;
 				if (
 					args.data ||
@@ -1398,15 +1499,20 @@ export function createMcpServer(
 					});
 					if (!updateResult.success) return unwrap(updateResult);
 					liveChanged = updateResult.liveContentChanged !== false;
-					rev = extractContentRev(updateResult.data);
+					savedRev = extractContentRev(updateResult.data);
+					rev = savedRev;
 				}
 				return unwrapAndInvalidate(
 					extra,
-					await emdash.handleContentPublish(args.collection, resolvedId, {
-						_rev: rev,
-						actor: { ...actor, source: "mcp" },
-						origin: { source: "mcp" },
-					}),
+					afterSavedFields(
+						await emdash.handleContentPublish(args.collection, resolvedId, {
+							_rev: rev,
+							actor: { ...actor, source: "mcp" },
+							origin: { source: "mcp" },
+						}),
+						savedRev,
+						"publish",
+					),
 					[args.collection, resolvedId],
 					liveChanged,
 				);
@@ -1414,6 +1520,7 @@ export function createMcpServer(
 
 			if (args.status === "draft") {
 				let rev: string | undefined = args._rev;
+				let savedRev: string | undefined;
 				let liveChanged = false;
 				if (
 					args.data ||
@@ -1438,15 +1545,20 @@ export function createMcpServer(
 					});
 					if (!updateResult.success) return unwrap(updateResult);
 					liveChanged = updateResult.liveContentChanged !== false;
-					rev = extractContentRev(updateResult.data);
+					savedRev = extractContentRev(updateResult.data);
+					rev = savedRev;
 				}
 				return unwrapAndInvalidate(
 					extra,
-					await emdash.handleContentUnpublish(args.collection, resolvedId, {
-						_rev: rev,
-						actor: { ...actor, source: "mcp" },
-						origin: { source: "mcp" },
-					}),
+					afterSavedFields(
+						await emdash.handleContentUnpublish(args.collection, resolvedId, {
+							_rev: rev,
+							actor: { ...actor, source: "mcp" },
+							origin: { source: "mcp" },
+						}),
+						savedRev,
+						"unpublish",
+					),
 					[args.collection, resolvedId],
 					liveChanged,
 				);
@@ -1488,7 +1600,7 @@ export function createMcpServer(
 		async (args, extra) => {
 			requireScope(extra, "content:write");
 			requireRole(extra, Role.AUTHOR);
-			const ec = getEmDash(extra);
+			const { emdash: ec, userId, userRole } = getExtra(extra);
 
 			// Fetch item to check ownership
 			const existing = await ec.handleContentGet(args.collection, args.id);
@@ -1505,10 +1617,13 @@ export function createMcpServer(
 			const resolvedId = extractContentId(existing.data) ?? args.id;
 			const locked = await refuseLockedEntry(extra, args.collection, resolvedId, args.overrideLock);
 			if (locked) return locked;
-			return unwrapAndInvalidate(extra, await ec.handleContentDelete(args.collection, resolvedId), [
-				args.collection,
-				resolvedId,
-			]);
+			return unwrapAndInvalidate(
+				extra,
+				await ec.handleContentDelete(args.collection, resolvedId, {
+					actor: { id: userId, role: userRole, source: "mcp" },
+				}),
+				[args.collection, resolvedId],
+			);
 		},
 	);
 
@@ -1754,7 +1869,7 @@ export function createMcpServer(
 		async (args, extra) => {
 			requireScope(extra, "content:write");
 			requireRole(extra, Role.AUTHOR);
-			const ec = getEmDash(extra);
+			const { emdash: ec, userId, userRole } = getExtra(extra);
 
 			const existing = await ec.handleContentGet(args.collection, args.id);
 			if (!existing.success) {
@@ -1772,7 +1887,9 @@ export function createMcpServer(
 			if (locked) return locked;
 			return unwrapAndInvalidate(
 				extra,
-				await ec.handleContentUnschedule(args.collection, resolvedId),
+				await ec.handleContentUnschedule(args.collection, resolvedId, {
+					actor: { id: userId, role: userRole, source: "mcp" },
+				}),
 				[args.collection, resolvedId],
 			);
 		},
@@ -1818,7 +1935,7 @@ export function createMcpServer(
 		async (args, extra) => {
 			requireScope(extra, "content:write");
 			requireRole(extra, Role.AUTHOR);
-			const ec = getEmDash(extra);
+			const { emdash: ec, userId, userRole } = getExtra(extra);
 
 			// Fetch item to check ownership
 			const existing = await ec.handleContentGet(args.collection, args.id);
@@ -1837,7 +1954,10 @@ export function createMcpServer(
 			if (locked) return locked;
 			return unwrapAndInvalidate(
 				extra,
-				await ec.handleContentDiscardDraft(args.collection, resolvedId, { _rev: args._rev }),
+				await ec.handleContentDiscardDraft(args.collection, resolvedId, {
+					_rev: args._rev,
+					actor: { id: userId, role: userRole, source: "mcp" },
+				}),
 				[args.collection, resolvedId],
 			);
 		},
@@ -1896,11 +2016,7 @@ export function createMcpServer(
 				"content:edit_any",
 			);
 			const resolvedId = extractContentId(existing.data) ?? args.id;
-			return unwrapAndInvalidate(
-				extra,
-				await emdash.handleContentDuplicate(args.collection, resolvedId, userId),
-				[args.collection],
-			);
+			return unwrap(await emdash.handleContentDuplicate(args.collection, resolvedId, userId));
 		},
 	);
 
@@ -1924,6 +2040,8 @@ export function createMcpServer(
 			const result = await ec.handleContentTranslations(args.collection, args.id);
 			// Filter out non-published translations for users without draft
 			// access so a subscriber can't enumerate locales that aren't yet live.
+			// The requested entry is one of the translations; if it isn't
+			// published, report it as not found so its id or slug can't be probed.
 			if (result.success && !canReadDrafts(extra)) {
 				const data =
 					result.data && typeof result.data === "object"
@@ -1932,6 +2050,12 @@ export function createMcpServer(
 						: undefined;
 				const translations = Array.isArray(data?.translations) ? data.translations : [];
 				const filtered = translations.filter(isPublished);
+				if (!filtered.some((t) => isEntry(t, args.id))) {
+					return unwrap({
+						success: false,
+						error: { code: "NOT_FOUND", message: `Content item not found: ${args.id}` },
+					});
+				}
 				return unwrap({
 					success: true,
 					data: { ...data, translations: filtered },
@@ -2306,7 +2430,8 @@ export function createMcpServer(
 				"table and schema definition. The slug must be lowercase alphanumeric " +
 				"with underscores, starting with a letter. Supports: 'drafts' (draft/" +
 				"publish workflow), 'revisions' (version history), 'preview' (live " +
-				"preview), 'scheduling' (timed publish), 'search' (full-text indexing), " +
+				"preview), 'no-scheduling' (disables timed publishing, which is otherwise allowed), " +
+				"'search' (full-text indexing), " +
 				"and 'seo' (SEO metadata).",
 			inputSchema: z.object({
 				slug: z
@@ -2318,7 +2443,7 @@ export function createMcpServer(
 				description: z.string().optional().describe("Description of this collection"),
 				icon: createCollectionBody.shape.icon.describe("Icon name for the admin UI"),
 				supports: createCollectionBody.shape.supports.describe(
-					"Features to enable (default: ['drafts', 'revisions'])",
+					"Collection capabilities and opt-outs (default: ['drafts', 'revisions']); scheduling is allowed unless 'no-scheduling' is present",
 				),
 				routable: createCollectionBody.shape.routable.describe(
 					"Require a slug before publishing (default: true)",
@@ -2747,10 +2872,7 @@ export function createMcpServer(
 			if (!existing.success) {
 				return unwrap(existing);
 			}
-			const media = (existing.data as Record<string, unknown> | undefined)?.item as
-				| Record<string, unknown>
-				| undefined;
-			const authorId = typeof media?.authorId === "string" ? media.authorId : "";
+			const authorId = existing.data.item.authorId ?? "";
 			requireOwnership(extra, authorId, "media:edit_own", "media:edit_any");
 
 			return unwrap(
@@ -2787,13 +2909,18 @@ export function createMcpServer(
 			if (!existing.success) {
 				return unwrap(existing);
 			}
-			const media = (existing.data as Record<string, unknown> | undefined)?.item as
-				| Record<string, unknown>
-				| undefined;
-			const authorId = typeof media?.authorId === "string" ? media.authorId : "";
+			const authorId = existing.data.item.authorId ?? "";
 			requireOwnership(extra, authorId, "media:delete_own", "media:delete_any");
 
-			return unwrap(await ec.handleMediaDelete(args.id));
+			const result = await ec.handleMediaDelete(args.id);
+			if (
+				result.success &&
+				result.data?.storageDeleted &&
+				isRouteCachedMedia(result.data.storageKey, result.data.mimeType)
+			) {
+				await invalidateRouteCache(getExtra(extra).cache, [mediaCacheTag(result.data.storageKey)]);
+			}
+			return unwrap(result);
 		},
 	);
 
@@ -3129,7 +3256,8 @@ export function createMcpServer(
 					if (
 						!cursorTerm ||
 						cursorTerm.name !== args.taxonomy ||
-						(args.locale !== undefined && cursorTerm.locale !== args.locale)
+						(args.locale !== undefined &&
+							resolveConfiguredLocale(cursorTerm.locale) !== resolveConfiguredLocale(args.locale))
 					) {
 						return respondError("INVALID_CURSOR", "Pagination cursor no longer identifies a term");
 					}
@@ -3628,7 +3756,7 @@ export function createMcpServer(
 		async (args, extra) => {
 			requireScope(extra, "content:write");
 			requireRole(extra, Role.AUTHOR);
-			const { emdash, userId } = getExtra(extra);
+			const { emdash, userId, userRole } = getExtra(extra);
 
 			// Fetch the revision to discover the parent content entry
 			const revision = await emdash.handleRevisionGet(args.revisionId);
@@ -3663,7 +3791,7 @@ export function createMcpServer(
 			);
 			if (locked) return locked;
 
-			return unwrap(await emdash.handleRevisionRestore(args.revisionId, userId));
+			return unwrap(await emdash.handleRevisionRestore(args.revisionId, userId, userRole));
 		},
 	);
 
@@ -3677,7 +3805,7 @@ export function createMcpServer(
 			title: "Get Site Settings",
 			description:
 				"Get all site-wide settings (title, tagline, logo, favicon, URL, " +
-				"date/time formatting, social links, SEO defaults). Media references " +
+				"date/time formatting, social links, SEO defaults, and staging status). Media references " +
 				"(logo, favicon, defaultOgImage) include resolved URLs. Unset values " +
 				"are omitted from the response.",
 			inputSchema: z.object({}),
@@ -3727,6 +3855,12 @@ export function createMcpServer(
 					])
 					.optional()
 					.describe("Canonical site URL (http or https). Empty string clears it."),
+				staging: z
+					.boolean()
+					.optional()
+					.describe(
+						"true asks search engines not to index the site (noindex); false makes it live",
+					),
 				postsPerPage: z
 					.number()
 					.int()
@@ -3745,6 +3879,25 @@ export function createMcpServer(
 			requireRole(extra, Role.ADMIN);
 			const ec = getEmDash(extra);
 			try {
+				const seo = args.seo;
+				if (
+					ec.config.robotsTxtOverridden &&
+					seo &&
+					(Boolean(seo.robotsTxt) || seo.disallowAiTraining === true)
+				) {
+					const { getSiteSettingWithDb } = await import("../settings/index.js");
+					const stored = await getSiteSettingWithDb("seo", ec.db);
+					const changesRobotsTxt = Boolean(seo.robotsTxt) && seo.robotsTxt !== stored?.robotsTxt;
+					const enablesAiRule =
+						seo.disallowAiTraining === true && stored?.disallowAiTraining !== true;
+					if (changesRobotsTxt || enablesAiRule) {
+						return respondError(
+							"ROBOTS_TXT_OVERRIDDEN",
+							"This site serves its own src/pages/robots.txt, so seo.robotsTxt and " +
+								"seo.disallowAiTraining would have no effect. Edit that file instead.",
+						);
+					}
+				}
 				const { handleSettingsUpdate } = await import("../api/handlers/settings.js");
 				return unwrapAndInvalidate(extra, await handleSettingsUpdate(ec.db, ec.storage, args), [
 					siteSettingsTag(),

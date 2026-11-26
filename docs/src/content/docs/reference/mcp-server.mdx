@@ -58,8 +58,8 @@ The following table shows the minimum role for the broad capability. Ownership c
 | --- | --- |
 | Read published content, media, taxonomies, terms, and menus | Subscriber |
 | Read drafts, scheduled content, trash, comparisons, and revisions | Contributor |
-| Create content or upload media | Contributor |
-| Edit or publish owned content and register media | Author |
+| Create content, edit owned drafts, or upload media | Contributor |
+| Edit owned published or scheduled content, publish owned content, or register media | Author |
 | Manage bylines, taxonomies, menus, or all users' content | Editor |
 | Read schemas or settings | Editor |
 | Change schemas or settings, permanently delete content, or repair media usage | Admin |
@@ -251,6 +251,8 @@ Bylines are reusable author or contributor credits. `byline_create` can create a
 
 While another user holds an entry's [edit lock](/reference/rest-api/#entry-edit-lock) because they have it open in the admin, `content_update`, `content_delete`, `content_publish`, `content_unpublish`, `content_schedule`, `content_unschedule`, `content_discard_draft` and `revision_restore` fail with `ENTRY_LOCKED`, and the error names the holder. Reading the item again does not clear the refusal. Pass `overrideLock: true` to write anyway.
 
+While people [co-edit an entry](/guides/working-with-content/#edit-with-other-people) in the admin, the entry has no edit lock, and these writes appear in their editors. Their saves change `_rev` every few seconds, so a write that sends `_rev` conflicts more often. `content_publish`, `content_unpublish`, `content_schedule` and `content_discard_draft` also conflict while the editors hold edits that aren't saved yet.
+
 ## Translations
 
 Content, byline, taxonomy term, and menu translation tools return every locale variant in the relevant translation group. Use the creation tool's `translationOf` input when its schema provides one; `tools/list` is authoritative for the required fields.
@@ -315,7 +317,9 @@ After an approved call starts an operation, the same user and token can call `si
 
 ## Plugin tools
 
-An administrator must enable each plugin's MCP surface. Enabled tools appear in `tools/list` as `<pluginId>__<localName>` and require `mcp:tools` or `mcp:tools:<pluginId>` for token-authenticated calls. EmDash also checks the permission declared by the plugin route and records the plugin, tool, route, and actor in the audit log.
+An administrator must enable each plugin's MCP surface. Enabled tools appear in `tools/list` with an MCP-safe plugin prefix followed by `__<localName>` (for example, `@acme/calendar` and `createEvent` become `acme__calendar__createEvent`) and require `mcp:tools` or `mcp:tools:<pluginId>` for token-authenticated calls. EmDash also checks the permission declared by the plugin route and records the plugin, tool, route, and actor in the audit log.
+
+Scoped IDs with ambiguous separators include a short hash before the local tool name. Use `tools/list` to discover generated names. If two tools generate the same name, EmDash keeps the first and logs a warning for the skipped tool.
 
 Because plugin tools are installation-specific, they are not part of the static inventory above.
 

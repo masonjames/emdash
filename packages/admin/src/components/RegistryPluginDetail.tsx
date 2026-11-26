@@ -23,7 +23,6 @@ import { msg } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Warning } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import * as React from "react";
 
 import { ApiResponseError, fetchManifest } from "../lib/api/client.js";
@@ -56,7 +55,8 @@ import {
 } from "../lib/api/registry.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { registryIdentity } from "../lib/registry-identity.js";
-import { ArrowPrev } from "./ArrowIcons.js";
+import { formatDate } from "../lib/utils.js";
+import { useBreadcrumbLabel } from "./AdminBreadcrumbs.js";
 import { CapabilityConsentDialog } from "./CapabilityConsentDialog.js";
 import { getMutationError } from "./DialogError.js";
 import { PublisherIdentity } from "./PublisherHandle.js";
@@ -70,7 +70,7 @@ export interface RegistryPluginDetailProps {
 }
 
 export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailProps) {
-	const { t } = useLingui();
+	const { t, i18n } = useLingui();
 	const queryClient = useQueryClient();
 	const [showConsent, setShowConsent] = React.useState(false);
 	const [mcpConsentTools, setMcpConsentTools] = React.useState<PluginMcpConsentTool[]>([]);
@@ -454,13 +454,18 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 		},
 	});
 
-	if (
+	const isLoadingView =
 		(packageQueryEnabled && (isLoadingPkg || !isPackageFetchedAfterMount)) ||
-		(releasesQueryEnabled && !areReleasesFetchedAfterMount)
-	) {
+		(releasesQueryEnabled && !areReleasesFetchedAfterMount);
+	const isUnavailableView = listingUnavailable || packageQueryError || releasesQueryError;
+	let breadcrumbLabel: string | undefined = t`Plugin Details`;
+	if (pkg && !isUnavailableView) breadcrumbLabel = displayName ?? slug;
+	else if (isLoadingView) breadcrumbLabel = undefined;
+	useBreadcrumbLabel(breadcrumbLabel);
+
+	if (isLoadingView) {
 		return (
 			<div className="space-y-6">
-				<BackLink />
 				<div className="animate-pulse space-y-4">
 					<div className="flex items-center gap-4">
 						<div className="h-16 w-16 rounded-xl bg-kumo-subtle" />
@@ -476,10 +481,9 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 		);
 	}
 
-	if (listingUnavailable || packageQueryError || releasesQueryError) {
+	if (isUnavailableView) {
 		return (
 			<div className="space-y-6">
-				<BackLink />
 				<div
 					className="rounded-md border border-kumo-border bg-kumo-subtle p-4 text-kumo-default"
 					role="status"
@@ -496,7 +500,6 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 	if (!pkg) {
 		return (
 			<div className="space-y-6">
-				<BackLink />
 				<div
 					className="rounded-md border border-kumo-error bg-kumo-error/10 p-4 text-kumo-error"
 					role="alert"
@@ -509,8 +512,6 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 
 	return (
 		<div className="space-y-6">
-			<BackLink />
-
 			{/* Banner */}
 			{bannerSrc ? (
 				<img
@@ -578,12 +579,16 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 							{lastUpdated ? (
 								<div className="flex items-center gap-1">
 									<dt className="font-medium">{t`Updated`}</dt>
-									<dd>{formatDate(lastUpdated)}</dd>
+									<dd>
+										<bdi>{formatRegistryDate(lastUpdated, i18n.locale)}</bdi>
+									</dd>
 								</div>
 							) : null}
 							<div className="flex items-center gap-1">
 								<dt className="font-medium">{t`Indexed`}</dt>
-								<dd>{formatDate(release.indexedAt)}</dd>
+								<dd>
+									<bdi>{formatRegistryDate(release.indexedAt, i18n.locale)}</bdi>
+								</dd>
 							</div>
 						</dl>
 					) : null}
@@ -781,7 +786,11 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 									</a>
 								) : null}
 								{a.email ? (
-									<a href={`mailto:${a.email}`} className="text-kumo-link hover:underline">
+									<a
+										href={`mailto:${a.email}`}
+										dir="ltr"
+										className="text-kumo-link hover:underline"
+									>
 										{a.email}
 									</a>
 								) : null}
@@ -803,13 +812,18 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 								className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm"
 							>
 								{c.email ? (
-									<a href={`mailto:${c.email}`} className="text-kumo-link hover:underline">
+									<a
+										href={`mailto:${c.email}`}
+										dir="ltr"
+										className="text-kumo-link hover:underline"
+									>
 										{c.email}
 									</a>
 								) : null}
 								{c.url ? (
 									<a
 										href={c.url}
+										dir="ltr"
 										target="_blank"
 										rel="noreferrer"
 										className="text-kumo-link hover:underline"
@@ -873,8 +887,10 @@ export function RegistryPluginDetail({ pluginId, config }: RegistryPluginDetailP
 					verification={activeVerification.verification}
 					isPending={installMutation.isPending}
 					error={
-						registryVerificationErrorMessage(installMutation.error) ??
-						getMutationError(installMutation.error)
+						installMutation.error instanceof PluginMcpConsentRequiredError
+							? null
+							: (registryVerificationErrorMessage(installMutation.error) ??
+								getMutationError(installMutation.error))
 					}
 					onConfirm={() => installMutation.mutate()}
 					onCancel={() => {
@@ -896,19 +912,6 @@ const SECTION_LABELS: Record<SectionKey, MessageDescriptor> = {
 	changelog: msg`Changelog`,
 	security: msg`Security`,
 };
-
-function BackLink() {
-	const { t } = useLingui();
-	return (
-		<Link
-			to="/plugins/registry"
-			className="inline-flex items-center gap-1 text-sm text-kumo-subtle hover:text-kumo-default"
-		>
-			<ArrowPrev className="h-4 w-4" />
-			{t`Back to plugins`}
-		</Link>
-	);
-}
 
 const PRE_RELEASE_VERSION_RE = /^\d+\.\d+\.\d+-/;
 
@@ -933,9 +936,10 @@ function envLabel(key: string): string {
 	return key.startsWith("env:") ? key.slice("env:".length) : key;
 }
 
-function formatDate(iso: string): string {
+/** Registry timestamps come from a third party: show the raw value rather than throw on a bad one. */
+function formatRegistryDate(iso: string, locale: string): string {
 	try {
-		return new Date(iso).toLocaleDateString();
+		return formatDate(iso, locale, {});
 	} catch {
 		return iso;
 	}

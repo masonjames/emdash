@@ -7,11 +7,12 @@
 import type { APIRoute } from "astro";
 
 import { requirePerm } from "#api/authorize.js";
-import { handleError, unwrapResult } from "#api/error.js";
+import { apiError, handleError, unwrapResult } from "#api/error.js";
 import { handleMenuItemCreate } from "#api/handlers/menus.js";
 import { isParseError, parseBody, parseQuery } from "#api/parse.js";
 import { createMenuItemBody, localeFilterQuery } from "#api/schemas.js";
 import { menuTag } from "#cache/chrome-tags.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
 
 export const prerender = false;
 
@@ -21,6 +22,9 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 
 	const denied = requirePerm(user, "menus:manage");
 	if (denied) return denied;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const localeQ = parseQuery(new URL(request.url), localeFilterQuery);
 	if (isParseError(localeQ)) return localeQ;
@@ -31,7 +35,7 @@ export const POST: APIRoute = async ({ params, request, locals, cache }) => {
 
 		const result = await handleMenuItemCreate(emdash.db, name, body, { locale: localeQ.locale });
 		if (!result.success) return unwrapResult(result, 201);
-		if (cache?.enabled) await cache.invalidate({ tags: [menuTag(name)] });
+		await invalidateRouteCache(cache, [menuTag(name)]);
 		return unwrapResult(result, 201);
 	} catch (error) {
 		return handleError(error, "Failed to create menu item", "MENU_ITEM_CREATE_ERROR");

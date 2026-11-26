@@ -1,11 +1,16 @@
 import { sql } from "kysely";
 import { ulid } from "ulidx";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { _resetEnvCache } from "../../../src/api/public-url.js";
+import { MediaRepository } from "../../../src/database/repositories/media.js";
+import { OptionsRepository } from "../../../src/database/repositories/options.js";
 import { RevisionRepository } from "../../../src/database/repositories/revision.js";
+import { loadContentMediaUsageFields } from "../../../src/media/usage/content-fields.js";
 import {
 	CONTENT_SOURCE_SCHEMA_VERSION,
 	loadContentMediaUsageSnapshots,
+	loadContentMediaUsageSnapshotsBatch,
 } from "../../../src/media/usage/content-snapshots.js";
 import { buildContentMediaUsageSourceKey } from "../../../src/media/usage/source-key.js";
 import { BlockTypeRegistry } from "../../../src/schema/block-type-registry.js";
@@ -42,6 +47,8 @@ describeEachDialect("content media usage snapshots", (dialect) => {
 	});
 
 	afterEach(async () => {
+		vi.unstubAllEnvs();
+		_resetEnvCache();
 		await teardownForDialect(ctx);
 	});
 
@@ -98,6 +105,7 @@ describeEachDialect("content media usage snapshots", (dialect) => {
 				type: "repeater",
 				validation: { subFields: [{ slug: "image", type: "image" }] },
 			},
+			{ slug: "title", type: "string" },
 		]);
 		expect(snapshot.occurrences).toEqual([
 			expect.objectContaining({ fieldPath: "attachment", mediaId: "media-file" }),
@@ -108,6 +116,119 @@ describeEachDialect("content media usage snapshots", (dialect) => {
 		expect(snapshot.occurrences).not.toEqual(
 			expect.arrayContaining([expect.objectContaining({ mediaId: "media-ignored" })]),
 		);
+	});
+
+	it.each(["site:url", "emdash:site_url", "environment"])(
+		"counts absolute links using %s and ignores mismatched hosts",
+		async (source) => {
+			await registry.createField("posts", { slug: "download", label: "Download", type: "string" });
+			await registry.createField("posts", { slug: "source", label: "Source", type: "url" });
+			const options = new OptionsRepository(ctx.db);
+			if (source === "environment") {
+				await options.set("site:url", "https://other.example.test");
+				vi.stubEnv("EMDASH_SITE_URL", "https://content.example.test/preview");
+				_resetEnvCache();
+			} else {
+				await options.set(source, "https://content.example.test/preview");
+				if (source === "site:url")
+					await options.set("emdash:site_url", "https://other.example.test");
+			}
+			const media = await new MediaRepository(ctx.db).create({
+				filename: "linked.pdf",
+				mimeType: "application/pdf",
+				storageKey: "01K0LINKEDPDF.pdf",
+			});
+			const item = await insertPost(ctx, {
+				slug: "linked-files",
+				status: "published",
+				data: {
+					download:
+						"https://content.example.test/_emdash/api/media/file/01K0LINKEDPDF.pdf?download=1",
+					source: "https://other.example.test/_emdash/api/media/file/01K0LINKEDPDF.pdf",
+					body: [
+						{
+							_type: "block",
+							children: [{ _type: "span", text: "Download" }],
+							markDefs: [
+								{
+									_type: "link",
+									_key: "pdf-link",
+									href: "https://content.example.test/_emdash/api/media/file/01K0LINKEDPDF.pdf",
+								},
+							],
+						},
+					],
+				},
+			});
+
+			await sql`UPDATE ec_posts
+			SET download = ${"https://content.example.test/_emdash/api/media/file/01K0LINKEDPDF.pdf?download=1"},
+				source = ${"https://other.example.test/_emdash/api/media/file/01K0LINKEDPDF.pdf"}
+			WHERE id = ${item.id}`.execute(ctx.db);
+
+			const result = await loadContentMediaUsageSnapshots(ctx.db, "posts", item.id);
+			expect(result.success).toBe(true);
+			if (!result.success) throw new Error(result.error);
+			const occurrences = result.snapshots[0]?.occurrences ?? [];
+			expect(occurrences.filter((occurrence) => occurrence.mediaId === media.id)).toHaveLength(2);
+			expect(occurrences).not.toEqual(
+				expect.arrayContaining([expect.objectContaining({ fieldPath: "source" })]),
+			);
+		},
+	);
+
+	it("resolves every file URL in a batch with one extra query", async () => {
+		const media = new MediaRepository(ctx.db);
+		const withIds: string[] = [];
+		const withUrls: string[] = [];
+		const mediaIds = new Map<string, string>();
+		for (let index = 0; index < 120; index++) {
+			const storageKey = `01K0IMAGE${String(index).padStart(3, "0")}.png`;
+			const item = await media.create({ filename: storageKey, mimeType: "image/png", storageKey });
+			const byId = await insertPost(ctx, {
+				slug: `by-id-${index}`,
+				status: "published",
+				data: { body: [{ _type: "image", asset: { _ref: item.id } }] },
+			});
+			const byUrl = await insertPost(ctx, {
+				slug: `by-url-${index}`,
+				status: "published",
+				data: {
+					body: [{ _type: "image", asset: { url: `/_emdash/api/media/file/${storageKey}` } }],
+				},
+			});
+			withIds.push(byId.id);
+			withUrls.push(byUrl.id);
+			mediaIds.set(byUrl.id, item.id);
+		}
+		const fields = await loadContentMediaUsageFields(ctx.db, "posts");
+		const countQueries = async (contentIds: string[]) => {
+			let queries = 0;
+			const db = ctx.db.withPlugin({
+				transformQuery: ({ node }) => {
+					queries++;
+					return node;
+				},
+				transformResult: async ({ result }) => result,
+			});
+			const results = await loadContentMediaUsageSnapshotsBatch(db, "posts", contentIds, fields);
+			return { queries, results };
+		};
+
+		const byId = await countQueries(withIds);
+		const byUrl = await countQueries(withUrls);
+
+		expect(byUrl.queries).toBe(byId.queries + 1);
+		for (const contentId of withUrls) {
+			const result = byUrl.results.get(contentId);
+			if (!result?.success) throw new Error(`Expected a snapshot for ${contentId}`);
+			expect(result.snapshots[0]?.occurrences).toEqual([
+				expect.objectContaining({
+					fieldPath: "body[0].asset.url",
+					mediaId: mediaIds.get(contentId),
+				}),
+			]);
+		}
 	});
 
 	it("returns a typed not-found result for missing content", async () => {

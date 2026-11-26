@@ -261,6 +261,41 @@ describe("sandboxed plugin action settlement", () => {
 		expect(afterPublish).toHaveBeenCalledOnce();
 	});
 
+	it("rejects an independent action while a deferred after-hook is running", async () => {
+		const item = await draft();
+		const current = await contentActions.getVersioned(pluginId, "post", item.id);
+		if (!current) throw new Error("Content not found");
+		let releaseAfterPublish: () => void = () => undefined;
+		let markAfterPublishStarted: () => void = () => undefined;
+		const afterPublishGate = new Promise<void>((resolve) => (releaseAfterPublish = resolve));
+		const afterPublishStarted = new Promise<void>((resolve) => (markAfterPublishStarted = resolve));
+		afterPublish.mockImplementationOnce(async () => {
+			markAfterPublishStarted();
+			await afterPublishGate;
+		});
+
+		await contentActions.publish(pluginId, "post", item.id, { _rev: current._rev });
+		const published = await contentActions.getVersioned(pluginId, "post", item.id);
+		if (!published) throw new Error("Content not found");
+
+		const flushing = flushDeferred();
+		await afterPublishStarted;
+		try {
+			await expect(
+				contentActions.unpublish(pluginId, "post", item.id, { _rev: published._rev }),
+			).rejects.toMatchObject({ code: "CONTENT_ACTION_REENTRANT" });
+		} finally {
+			releaseAfterPublish();
+			await flushing;
+		}
+		await contentActions.unpublish(pluginId, "post", item.id, { _rev: published._rev });
+
+		expect((await new ContentRepository(runtime.db).findByIdOrSlug("post", item.id))?.status).toBe(
+			"draft",
+		);
+		await flushDeferred();
+	});
+
 	it("keeps concurrent route invalidators scoped to their own request", async () => {
 		const [first, second] = await Promise.all([draft(), draft()]);
 		let releaseFirst: () => void = () => undefined;
@@ -344,6 +379,84 @@ describe("sandboxed plugin action settlement", () => {
 		await contentActions.flush(pluginId, invocationId, true);
 		await flushDeferred();
 		expect(afterPublish).toHaveBeenCalledOnce();
+	});
+
+	it("purges a deleted media file through the invocation's cache invalidator", async () => {
+		const invocationId = randomUUID();
+		const invocationInvalidate = vi.fn().mockResolvedValue(undefined);
+		const siteInvalidate = vi.fn().mockResolvedValue(undefined);
+		runtime.setPluginContentCacheInvalidator(siteInvalidate);
+
+		contentActions.begin?.(pluginId, invocationId, invocationInvalidate);
+		await contentActions.invalidateMedia?.(pluginId, "photo.png", invocationId);
+		// The bridge call runs in another entrypoint, so the host purges at flush.
+		expect(invocationInvalidate).not.toHaveBeenCalled();
+		await contentActions.flush(pluginId, invocationId, true);
+		await flushDeferred();
+
+		expect(invocationInvalidate).toHaveBeenCalledWith(["emdash:media:photo.png"]);
+		expect(siteInvalidate).not.toHaveBeenCalled();
+	});
+
+	it("purges a media file deleted after a timed-out invocation once it settles", async () => {
+		const invocationId = randomUUID();
+		const invocationInvalidate = vi.fn().mockResolvedValue(undefined);
+
+		contentActions.begin?.(pluginId, invocationId, invocationInvalidate);
+		await contentActions.flush(pluginId, invocationId, false);
+		await contentActions.invalidateMedia?.(pluginId, "photo.png", invocationId);
+		expect(invocationInvalidate).not.toHaveBeenCalled();
+		await contentActions.flush(pluginId, invocationId, true);
+		await flushDeferred();
+
+		expect(invocationInvalidate).toHaveBeenCalledOnce();
+		expect(invocationInvalidate).toHaveBeenCalledWith(["emdash:media:photo.png"]);
+	});
+
+	it("purges a media file queued on a timed-out invocation that never settles", async () => {
+		vi.useFakeTimers();
+		const invocationId = randomUUID();
+		const invocationInvalidate = vi.fn().mockResolvedValue(undefined);
+
+		contentActions.begin?.(pluginId, invocationId, invocationInvalidate);
+		await contentActions.flush(pluginId, invocationId, false);
+		await contentActions.invalidateMedia?.(pluginId, "photo.png", invocationId);
+		await vi.advanceTimersByTimeAsync(60_000);
+		await flushDeferred();
+
+		expect(invocationInvalidate).toHaveBeenCalledOnce();
+		expect(invocationInvalidate).toHaveBeenCalledWith(["emdash:media:photo.png"]);
+	});
+
+	it("purges immediately for an invocation that has already settled", async () => {
+		const invocationId = randomUUID();
+		const invocationInvalidate = vi.fn().mockResolvedValue(undefined);
+		const siteInvalidate = vi.fn().mockResolvedValue(undefined);
+		runtime.setPluginContentCacheInvalidator(siteInvalidate);
+
+		contentActions.begin?.(pluginId, invocationId, invocationInvalidate);
+		await contentActions.flush(pluginId, invocationId, true);
+		await contentActions.invalidateMedia?.(pluginId, "photo.png", invocationId);
+
+		expect(siteInvalidate).toHaveBeenCalledWith(["emdash:media:photo.png"]);
+		expect(invocationInvalidate).not.toHaveBeenCalled();
+	});
+
+	it("purges a media file deleted outside a route and survives a failed purge", async () => {
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const invalidate = vi.fn().mockRejectedValue(new Error("purge unavailable"));
+			runtime.setPluginContentCacheInvalidator(invalidate);
+
+			await expect(
+				contentActions.invalidateMedia?.(pluginId, "photo.png"),
+			).resolves.toBeUndefined();
+
+			expect(invalidate).toHaveBeenCalledWith(["emdash:media:photo.png"]);
+			expect(log).toHaveBeenCalled();
+		} finally {
+			log.mockRestore();
+		}
 	});
 
 	it("invalidates publication from a cron hook", async () => {

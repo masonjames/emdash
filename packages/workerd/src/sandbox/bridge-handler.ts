@@ -61,6 +61,8 @@ import type {
 	SiteInfo,
 	TaxonomyAccessWithWrite,
 } from "emdash";
+import { createKVAccess, withTransaction } from "emdash/internal/plugins/host";
+import { isRouteCachedMedia } from "emdash/media/image-endpoint";
 import type { Kysely } from "kysely";
 
 const CONTENT_CREATE_ERROR_CODES = new Set([
@@ -357,7 +359,7 @@ async function dispatch(
 	const { db, pluginId } = opts;
 
 	switch (method) {
-		// ── KV (stored in _plugin_storage with collection='__kv') ────────
+		// ── KV ───────────────────────────────────────────────────────
 		case "kv/get":
 			return kvGet(
 				db,
@@ -817,7 +819,9 @@ async function dispatch(
 			);
 		case "media/delete":
 			requireCapability(opts, "media:write");
-			return mediaDelete(db, requireString(body, "id"), opts.storage);
+			return mediaDelete(db, requireString(body, "id"), opts.storage, (storageKey) =>
+				invalidateMediaCache(opts, pluginId, storageKey, optionalString(body, "invocationId")),
+			);
 
 		// ── HTTP ────────────────────────────────────────────────────────
 		case "http/fetch":
@@ -1319,6 +1323,15 @@ async function guardedContentWrite<T>(
 	return result;
 }
 
+async function invalidateMediaCache(
+	opts: BridgeHandlerOptions,
+	pluginId: string,
+	storageKey: string,
+	invocationId: string | undefined,
+): Promise<void> {
+	await opts.contentActions?.()?.invalidateMedia?.(pluginId, storageKey, invocationId);
+}
+
 function requireContentActions(opts: BridgeHandlerOptions): ContentActionCallbacks {
 	const actions = opts.contentActions?.();
 	if (!actions) throw new Error("Content actions are not configured");
@@ -1406,7 +1419,6 @@ function rowToContentItem(
 }
 
 // ── KV Operations ────────────────────────────────────────────────────────
-// Uses _plugin_storage with collection='__kv' (matching Cloudflare bridge)
 
 const SETTINGS_KEY_PREFIX = "settings:";
 
@@ -1433,16 +1445,15 @@ async function kvGet(
 	settingsSchema: Record<string, SettingField> = {},
 	secretRedactor?: PluginSecretRedactor,
 ): Promise<unknown> {
-	if (isSettingsKey(key)) {
-		const value = await createSettingsAccess(
-			new OptionsRepository(db),
-			pluginId,
-			settingsSchema,
-			undefined,
-			secretRedactor?.add,
-		).get(key.slice(SETTINGS_KEY_PREFIX.length));
-		if (value !== null) return value;
-	}
+	if (!isSettingsKey(key)) return createKVAccess(new OptionsRepository(db), pluginId).get(key);
+	const settingValue = await createSettingsAccess(
+		new OptionsRepository(db),
+		pluginId,
+		settingsSchema,
+		undefined,
+		secretRedactor?.add,
+	).get(key.slice(SETTINGS_KEY_PREFIX.length));
+	if (settingValue !== null) return settingValue;
 	const row = await db
 		.selectFrom("_plugin_storage")
 		.where("plugin_id", "=", pluginId)
@@ -1453,10 +1464,10 @@ async function kvGet(
 	if (!row) return null;
 	try {
 		const value: unknown = JSON.parse(row.data);
-		if (isSettingsKey(key)) observeSecretSetting(key, value, settingsSchema, secretRedactor);
+		observeSecretSetting(key, value, settingsSchema, secretRedactor);
 		return value;
 	} catch {
-		if (isSettingsKey(key)) observeSecretSetting(key, row.data, settingsSchema, secretRedactor);
+		observeSecretSetting(key, row.data, settingsSchema, secretRedactor);
 		return row.data;
 	}
 }
@@ -1480,7 +1491,7 @@ async function kvSet(
 		await kvDeleteLegacy(db, pluginId, key);
 		return;
 	}
-	await new PluginStorageRepository(db, pluginId, "__kv", []).put(key, value);
+	await createKVAccess(new OptionsRepository(db), pluginId).set(key, value);
 }
 
 async function kvGetVersioned(
@@ -1489,18 +1500,18 @@ async function kvGetVersioned(
 	key: string,
 	opts: BridgeHandlerOptions,
 ) {
-	if (isSettingsKey(key)) {
-		const value = await createSettingsAccess(
-			new OptionsRepository(db),
-			pluginId,
-			opts.settingsSchema,
-			undefined,
-			opts.secretRedactor?.add,
-		).getVersioned(key.slice(SETTINGS_KEY_PREFIX.length));
-		if (value !== null) return value;
-	}
+	if (!isSettingsKey(key))
+		return createKVAccess(new OptionsRepository(db), pluginId).getVersioned(key);
+	const value = await createSettingsAccess(
+		new OptionsRepository(db),
+		pluginId,
+		opts.settingsSchema,
+		undefined,
+		opts.secretRedactor?.add,
+	).getVersioned(key.slice(SETTINGS_KEY_PREFIX.length));
+	if (value !== null) return value;
 	const legacy = await getStorageRepo(opts, "__kv").getVersioned(key);
-	if (legacy && isSettingsKey(key)) {
+	if (legacy) {
 		observeSecretSetting(key, legacy.value, opts.settingsSchema ?? {}, opts.secretRedactor);
 	}
 	return legacy;
@@ -1515,7 +1526,11 @@ async function kvCompareAndSet(
 	opts: BridgeHandlerOptions,
 ) {
 	if (!isSettingsKey(key)) {
-		return getStorageRepo(opts, "__kv").compareAndSet(key, expectedRevision, value);
+		return createKVAccess(new OptionsRepository(db), pluginId).compareAndSet(
+			key,
+			expectedRevision,
+			value,
+		);
 	}
 	const result = await createSettingsAccess(
 		new OptionsRepository(db),
@@ -1536,7 +1551,10 @@ async function kvCompareAndDelete(
 	opts: BridgeHandlerOptions,
 ) {
 	if (!isSettingsKey(key)) {
-		return getStorageRepo(opts, "__kv").compareAndDelete(key, expectedRevision);
+		return createKVAccess(new OptionsRepository(db), pluginId).compareAndDelete(
+			key,
+			expectedRevision,
+		);
 	}
 	const result = await createSettingsAccess(
 		new OptionsRepository(db),
@@ -1577,7 +1595,7 @@ async function kvDelete(
 		]);
 		return optionDeleted || legacyDeleted;
 	}
-	return kvDeleteLegacy(db, pluginId, key);
+	return createKVAccess(new OptionsRepository(db), pluginId).delete(key);
 }
 
 async function kvList(
@@ -1587,31 +1605,32 @@ async function kvList(
 	settingsSchema: Record<string, SettingField> = {},
 	secretRedactor?: PluginSecretRedactor,
 ): Promise<Array<{ key: string; value: unknown }>> {
+	const includesSettings =
+		SETTINGS_KEY_PREFIX.startsWith(prefix) || prefix.startsWith(SETTINGS_KEY_PREFIX);
+	if (!includesSettings) return createKVAccess(new OptionsRepository(db), pluginId).list(prefix);
 	const rows = await db
 		.selectFrom("_plugin_storage")
 		.where("plugin_id", "=", pluginId)
 		.where("collection", "=", "__kv")
-		.where("id", "like", `${prefix}%`)
+		.where("id", "like", "settings:%")
 		.select(["id", "data"])
 		.execute();
 
-	const entries = new Map(rows.map((row) => [row.id, JSON.parse(row.data) as unknown]));
-	const includesSettings =
-		SETTINGS_KEY_PREFIX.startsWith(prefix) || prefix.startsWith(SETTINGS_KEY_PREFIX);
-	if (includesSettings) {
-		const settingPrefix = prefix.startsWith(SETTINGS_KEY_PREFIX)
-			? prefix.slice(SETTINGS_KEY_PREFIX.length)
-			: "";
-		for (const { key, value } of await createSettingsAccess(
-			new OptionsRepository(db),
-			pluginId,
-			settingsSchema,
-			undefined,
-			secretRedactor?.add,
-		).list(settingPrefix)) {
-			const fullKey = `${SETTINGS_KEY_PREFIX}${key}`;
-			if (fullKey.startsWith(prefix)) entries.set(fullKey, value);
-		}
+	const entries = new Map(
+		rows
+			.filter((row) => isSettingsKey(row.id) && row.id.startsWith(prefix))
+			.map((row) => [row.id, JSON.parse(row.data) as unknown]),
+	);
+	const options = new OptionsRepository(db);
+	const settings = createSettingsAccess(
+		options,
+		pluginId,
+		settingsSchema,
+		undefined,
+		secretRedactor?.add,
+	);
+	for (const { key, value } of await createKVAccess(options, pluginId, settings).list(prefix)) {
+		entries.set(key, value);
 	}
 	for (const [key, value] of entries) {
 		if (isSettingsKey(key)) observeSecretSetting(key, value, settingsSchema, secretRedactor);
@@ -1781,18 +1800,7 @@ async function contentDelete(
 	id: string,
 ): Promise<boolean> {
 	validateCollectionName(collection);
-	const table = `ec_${collection}`;
-
-	// Soft-delete: set deleted_at timestamp (matching Cloudflare bridge)
-	const now = new Date().toISOString();
-	const result = await asContentDb(db)
-		.updateTable(table)
-		.set({ deleted_at: now, updated_at: now })
-		.where("id", "=", id)
-		.where("deleted_at", "is", null)
-		.executeTakeFirst();
-
-	return BigInt(result.numUpdatedRows) > 0n;
+	return new ContentRepository(db).delete(collection, id);
 }
 
 // ── Batch Content Operations ─────────────────────────────────────────────
@@ -1817,7 +1825,7 @@ async function contentCreateMany(
 	if (items.length > MAX_BATCH_SIZE) {
 		throw new Error(`Batch size ${items.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
 	}
-	return db.transaction().execute(async (trx) => {
+	return withTransaction(db, async (trx) => {
 		const results = [];
 		for (const data of items) {
 			results.push(await contentCreate(trx, collection, data, locale));
@@ -1843,7 +1851,7 @@ async function contentUpdateMany(
 	if (items.length > MAX_BATCH_SIZE) {
 		throw new Error(`Batch size ${items.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
 	}
-	return db.transaction().execute(async (trx) => {
+	return withTransaction(db, async (trx) => {
 		const results = [];
 		for (const item of items) {
 			results.push(await contentUpdate(trx, collection, item.id, item.data));
@@ -1860,7 +1868,7 @@ async function contentDeleteMany(
 	if (ids.length > MAX_BATCH_SIZE) {
 		throw new Error(`Batch size ${ids.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
 	}
-	return db.transaction().execute(async (trx) => {
+	return withTransaction(db, async (trx) => {
 		let count = 0;
 		for (const id of ids) {
 			const deleted = await contentDelete(trx, collection, id);
@@ -2078,12 +2086,13 @@ async function mediaDelete(
 	db: Kysely<Database>,
 	id: string,
 	storage?: BridgeStorage | null,
+	invalidateMedia?: (storageKey: string) => Promise<void>,
 ): Promise<boolean> {
 	// Look up storage key before deleting
 	const media = await db
 		.selectFrom("media")
 		.where("id", "=", id)
-		.select("storage_key")
+		.select(["storage_key", "mime_type"])
 		.executeTakeFirst();
 
 	if (!media) return false;
@@ -2095,10 +2104,15 @@ async function mediaDelete(
 	// the DB row is already deleted and the orphan cleanup cron will
 	// catch it. Matches the Cloudflare bridge's behavior.
 	if (storage && media.storage_key) {
+		let storageDeleted = false;
 		try {
 			await storage.delete(media.storage_key);
+			storageDeleted = true;
 		} catch (error) {
 			console.warn(`[bridge] Failed to delete storage object ${media.storage_key}:`, error);
+		}
+		if (storageDeleted && isRouteCachedMedia(media.storage_key, media.mime_type)) {
+			await invalidateMedia?.(media.storage_key);
 		}
 	}
 

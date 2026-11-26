@@ -11,6 +11,7 @@ import { apiError, mapErrorStatus, unwrapResult } from "#api/error.js";
 import { claimEntryLockForWrite } from "#api/handlers/entry-lock.js";
 import { isParseError, parseOptionalBody } from "#api/parse.js";
 import { contentRevisionConditionBody } from "#api/schemas.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
 
 export const prerender = false;
 
@@ -36,22 +37,12 @@ export const POST: APIRoute = async ({ params, request, locals, url, cache }) =>
 			mapErrorStatus(existing.error?.code),
 		);
 	}
-	const existingData =
-		existing.data && typeof existing.data === "object"
-			? // eslint-disable-next-line typescript/no-unsafe-type-assertion -- handler returns unknown data; narrowed by typeof check above
-				(existing.data as Record<string, unknown>)
-			: undefined;
-	// Handler returns { item, _rev } — extract the item for ownership check
-	const existingItem =
-		existingData?.item && typeof existingData.item === "object"
-			? // eslint-disable-next-line typescript/no-unsafe-type-assertion -- narrowed by typeof check above
-				(existingData.item as Record<string, unknown>)
-			: existingData;
-	const authorId = typeof existingItem?.authorId === "string" ? existingItem.authorId : "";
+	const existingItem = existing.data.item;
+	const authorId = existingItem.authorId ?? "";
 	const denied = requireOwnerPerm(user, authorId, "content:edit_own", "content:edit_any");
 	if (denied) return denied;
 
-	const resolvedId = typeof existingItem?.id === "string" ? existingItem.id : id;
+	const resolvedId = existingItem.id;
 
 	const refusal = await claimEntryLockForWrite(emdash.db, collection, resolvedId, user!.id, {
 		override: body?.overrideLock,
@@ -64,11 +55,12 @@ export const POST: APIRoute = async ({ params, request, locals, url, cache }) =>
 
 	const result = await emdash.handleContentDiscardDraft(collection, resolvedId, {
 		_rev: body?._rev,
+		actor: { id: user!.id, role: user!.role },
 	});
 
 	if (!result.success) return unwrapResult(result);
 
-	if (cache?.enabled) await cache.invalidate({ tags: [collection, resolvedId] });
+	await invalidateRouteCache(cache, [collection, resolvedId]);
 
 	return unwrapResult(result);
 };

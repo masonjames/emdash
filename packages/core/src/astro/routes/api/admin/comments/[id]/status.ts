@@ -7,15 +7,16 @@
 import type { APIRoute } from "astro";
 
 import { requirePerm } from "#api/authorize.js";
-import { apiError, apiSuccess, handleError, requireDb, unwrapResult } from "#api/error.js";
+import { apiError, apiSuccess, handleError, unwrapResult } from "#api/error.js";
 import { handleCommentGet } from "#api/handlers/comments.js";
 import { isParseError, parseBody } from "#api/parse.js";
 import { commentStatusBody } from "#api/schemas.js";
+import { invalidateRouteCache } from "#cache/route-cache.js";
 import { CommentStatusConflictError } from "#comments/service.js";
 
 export const prerender = false;
 
-export const PUT: APIRoute = async ({ params, request, locals }) => {
+export const PUT: APIRoute = async ({ params, request, locals, cache }) => {
 	const { emdash, user } = locals;
 	const { id } = params;
 
@@ -23,8 +24,9 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
 		return apiError("VALIDATION_ERROR", "Comment ID required", 400);
 	}
 
-	const dbErr = requireDb(emdash?.db);
-	if (dbErr) return dbErr;
+	if (!emdash?.db) {
+		return apiError("NOT_CONFIGURED", "EmDash is not initialized", 500);
+	}
 
 	const denied = requirePerm(user, "comments:moderate");
 	if (denied) return denied;
@@ -55,6 +57,13 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
 
 		if (!updated) {
 			return apiError("NOT_FOUND", "Comment not found", 404);
+		}
+
+		if (
+			previousStatus !== updated.status &&
+			(previousStatus === "approved" || updated.status === "approved")
+		) {
+			await invalidateRouteCache(cache, [updated.collection, updated.contentId]);
 		}
 
 		return apiSuccess(updated);

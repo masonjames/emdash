@@ -47,6 +47,7 @@ import {
 	stripCredentialHeaders,
 } from "../import/ssrf.js";
 import { enrichImageMetadata } from "../media/enrich.js";
+import { isRouteCachedMedia } from "../media/image-endpoint.js";
 import { matchesMimeAllowlist, normalizeMime } from "../media/mime.js";
 import { markContentMediaUsageCollectionStaleSafely } from "../media/usage/content-refresh.js";
 import { SchemaRegistry } from "../schema/registry.js";
@@ -188,11 +189,9 @@ export function createKVAccess(
 				: await optionsRepo.getByPrefix(fullPrefix);
 			const result: Array<{ key: string; value: unknown }> = [];
 			for (const [fullKey, value] of entriesMap) {
-				if (includesSettings && fullKey.startsWith(`${prefix}settings:`)) continue;
-				result.push({
-					key: fullKey.slice(prefix.length),
-					value,
-				});
+				const key = fullKey.slice(prefix.length);
+				if (!fullKey.startsWith(fullPrefix) || key.startsWith("settings:")) continue;
+				result.push({ key, value });
 			}
 			if (includesSettings) {
 				const settingPrefix = requestedPrefix.startsWith("settings:")
@@ -403,8 +402,7 @@ export function createTaxonomyAccess(db: Kysely<Database>): TaxonomyAccess {
 
 	return {
 		async getAll(options?: TaxonomyReadOptions): Promise<TaxonomyDefInfo[]> {
-			let query = selectTaxonomyDefs(db);
-			if (options?.locale !== undefined) query = query.where("d.locale", "=", options.locale);
+			const query = selectTaxonomyDefs(db, options?.locale);
 			const rows = await query.orderBy("d.name", "asc").execute();
 			return rows.map((row) => ({
 				name: row.name,
@@ -1021,6 +1019,8 @@ export function createMediaAccessWithWrite(
 		| ((filename: string, contentType: string) => Promise<{ uploadUrl: string; mediaId: string }>)
 		| undefined,
 	storage?: Storage,
+	imagePlaceholders = true,
+	invalidateMedia?: (storageKey: string) => Promise<void>,
 ): MediaAccessWithWrite {
 	const mediaRepo = new MediaRepository(db);
 	const readAccess = createMediaAccess(db);
@@ -1080,7 +1080,9 @@ export function createMediaAccessWithWrite(
 			});
 
 			// Derive dimensions + LQIP placeholders (no-op for non-images).
-			const enriched = await enrichImageMetadata(new Uint8Array(bytes), mimeType);
+			const enriched = await enrichImageMetadata(new Uint8Array(bytes), mimeType, {
+				placeholders: imagePlaceholders,
+			});
 
 			// Create DB record — clean up storage on failure
 			let media;
@@ -1124,6 +1126,12 @@ export function createMediaAccessWithWrite(
 			// 404s. Matches the invalidation in
 			// `EmDashRuntime.handleMediaDelete`.
 			invalidateSiteSettingsCache();
+			if (
+				result.data.storageDeleted &&
+				isRouteCachedMedia(result.data.storageKey, result.data.mimeType)
+			) {
+				await invalidateMedia?.(result.data.storageKey);
+			}
 			return true;
 		},
 	};
@@ -1554,6 +1562,8 @@ export interface PluginContextFactoryOptions {
 	 * client IP the core auth path does.
 	 */
 	trustedProxyHeaders?: string[];
+	/** Whether media uploads should generate server-side image placeholders. */
+	imagePlaceholders?: boolean;
 	commentModerate?: (
 		pluginId: string,
 		id: string,
@@ -1569,8 +1579,19 @@ export interface ContentActionCallbacks {
 		invocationId: string,
 		invalidateContentCache?: (tags: string[]) => Promise<void>,
 	): void;
-	/** Release queued after-hooks; `final: false` keeps late actions self-scheduling after timeout. */
+	/** Release queued after-hooks; `final: false` keeps late content hooks self-scheduling after timeout. */
 	flush(pluginId: string, invocationId?: string, final?: boolean): Promise<void>;
+	/**
+	 * Purge cached responses for a storage key after a plugin deleted its file. Never throws.
+	 * Within an active invocation, including one released after timeout, the purge is queued for
+	 * the invocation's next flush or grace-period expiry. Execution requires the host to remain alive.
+	 */
+	invalidateMedia?(
+		pluginId: string,
+		storageKey: string,
+		invocationId?: string,
+		invalidateContentCache?: (tags: string[]) => Promise<void>,
+	): Promise<void>;
 	getVersioned(
 		pluginId: string,
 		collection: string,
@@ -1642,6 +1663,7 @@ export class PluginContextFactory {
 	private now: () => Date;
 	private emailPipeline?: EmailPipeline;
 	private commentModerate?: PluginContextFactoryOptions["commentModerate"];
+	private imagePlaceholders: boolean;
 	/**
 	 * Plugin IDs already warned about a missing media-write backend, so the
 	 * warning fires once per factory instead of on every hook/route context
@@ -1663,6 +1685,7 @@ export class PluginContextFactory {
 		this.now = options.now ?? (() => new Date());
 		this.emailPipeline = options.emailPipeline;
 		this.commentModerate = options.commentModerate;
+		this.imagePlaceholders = options.imagePlaceholders ?? true;
 	}
 
 	/**
@@ -1788,7 +1811,14 @@ export class PluginContextFactory {
 		}
 		if (capabilities.has("media:write")) {
 			if (this.getUploadUrl || this.storage) {
-				media = createMediaAccessWithWrite(db, this.getUploadUrl, this.storage);
+				const invalidateMedia = this.contentActions?.invalidateMedia?.bind(this.contentActions);
+				media = createMediaAccessWithWrite(
+					db,
+					this.getUploadUrl,
+					this.storage,
+					this.imagePlaceholders,
+					invalidateMedia && ((storageKey) => invalidateMedia(plugin.id, storageKey)),
+				);
 			} else {
 				if (!this.warnedMissingMediaBackend.has(plugin.id)) {
 					this.warnedMissingMediaBackend.add(plugin.id);
